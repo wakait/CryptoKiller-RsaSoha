@@ -34,7 +34,7 @@ jobs:
           msystem: UCRT64
           update: true
           install: base-devel pacman-mirrors diffutils m4 make pkgconf zip
-          pacboy: gcc:p rust:p openssl:p
+          pacboy: gcc:p rust:p openssl-devel:p
 
       - name: Cache Cargo and build files on D drive
         uses: actions/cache@v4
