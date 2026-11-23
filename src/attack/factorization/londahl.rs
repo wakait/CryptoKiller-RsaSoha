@@ -25,9 +25,8 @@ fn close_factor(n: &Integer, b: u64, pb: Option<&ProgressBar>) -> Option<(Intege
     // Approximate phi
     let phi_approx = n - 2 * n.clone().sqrt() + 1;
 
-    // Create a look-up table
+    // Create a look-up table and grow it on demand so other racing attacks can finish early.
     let mut look_up = std::collections::HashMap::new();
-    look_up.reserve(b as usize * 2);
 
     // Generate first entry
     let mut generate_entries = true;
