@@ -95,12 +95,16 @@ jobs:
               [ -f "$file" ] || continue
               objdump -p "$file" | awk '/DLL Name:/ {print $3}'
             done | sort -u | while read -r dll; do
-              resolved="$(command -v "$dll" || true)"
-              case "$resolved" in
-                /ucrt64/bin/*.dll|/usr/bin/*.dll|/mingw64/bin/*.dll)
-                  cp -n "$resolved" "$package/"
-                  ;;
-              esac
+              resolved=""
+              for dir in /ucrt64/bin /usr/bin /mingw64/bin; do
+                if [ -f "$dir/$dll" ]; then
+                  resolved="$dir/$dll"
+                  break
+                fi
+              done
+              if [ -n "$resolved" ]; then
+                cp -n "$resolved" "$package/"
+              fi
             done
           done
 
@@ -112,7 +116,7 @@ jobs:
           )
           grep -q 'rsacracker{windows_cli}' packaged-result.json
 
-          (cd "$package" && sha256sum *.exe *.dll > SHA256SUMS.txt)
+          (cd "$package" && find . -maxdepth 1 -type f ! -name SHA256SUMS.txt -print0 | sort -z | xargs -0 sha256sum > SHA256SUMS.txt)
           zip -qr "$package.zip" "$package"
 
       - name: Upload Windows ZIP
