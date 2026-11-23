@@ -204,6 +204,32 @@ fn no_successful_attack_returns_distinct_exit_code() {
         .contains("No attack succeeded"));
 }
 
+#[test]
+fn json_list_is_machine_readable() {
+    let output = run_bin(&["--list", "--json"]);
+    assert!(output.status.success());
+    let report: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap();
+    assert_eq!(report["success"], true);
+    assert!(report["attacks"].as_array().unwrap().len() > 1);
+}
+
+#[test]
+fn json_public_key_is_machine_readable() {
+    let output = run_bin(&[
+        "--key",
+        concat!(env!("CARGO_MANIFEST_DIR"), "/tests/keys/public_rsa.pem"),
+        "--public",
+        "--json",
+    ]);
+    assert!(output.status.success());
+    let report: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap();
+    assert_eq!(report["success"], true);
+    assert!(report["public_key"]
+        .as_str()
+        .unwrap()
+        .starts_with("-----BEGIN PUBLIC KEY-----"));
+}
+
 // --factors flag forces factor output even when cipher is present, no decryption output
 #[test]
 fn cli_flags_with_cipher_and_factors_flag_shows_factors() {
