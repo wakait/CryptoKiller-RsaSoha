@@ -499,15 +499,17 @@ fn run(json: bool) -> Result<i32, Box<dyn std::error::Error>> {
     let solution = match res {
         Ok(solution) => solution,
         Err(partial_factors) => {
-            // Print partial factors if any
-            if let Some(partial_factors) = partial_factors {
-                println!("Partial factors of n:");
-                for (i, p) in partial_factors.as_vec().into_iter().enumerate() {
-                    print!("p{} = {}", i + 1, p);
-                    if p.is_probably_prime(100) != IsPrime::Yes {
-                        print!(" (composite)");
+            // Print partial factors only in human-readable mode.
+            if !json {
+                if let Some(partial_factors) = partial_factors {
+                    println!("Partial factors of n:");
+                    for (i, p) in partial_factors.as_vec().into_iter().enumerate() {
+                        print!("p{} = {}", i + 1, p);
+                        if p.is_probably_prime(100) != IsPrime::Yes {
+                            print!(" (composite)");
+                        }
+                        println!();
                     }
-                    println!();
                 }
             }
             let error = format!(
@@ -520,9 +522,9 @@ fn run(json: bool) -> Result<i32, Box<dyn std::error::Error>> {
                 let mut report = error_report(&error);
                 report["elapsed_seconds"] = serde_json::json!(elapsed.as_secs_f64());
                 print_json(&report);
-                Ok(1)
+                return Ok(1);
             } else {
-                Err(error.into())
+                return Err(error.into());
             }
         }
     };

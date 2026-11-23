@@ -35,7 +35,6 @@ lto = true
 thiserror = "2.0"
 lazy_static = "1.5"
 clap = { version = "4.6", features = ["derive", "env"] }
-main_error = "0.1"
 primal = "0.3"
 ecm = { version = "1.0", features = ["progress-bar"] }
 openssl = "0.10"
@@ -43,7 +42,6 @@ base-x = "0.3"
 display_bytes = "0.2"
 ssh-key = { version = "0.6", features = ["encryption"] }
 tokio = { version = "1.53", features = ["rt", "rt-multi-thread"] }
-mpsc = { version = "0.3", default-features = false }
 num_cpus = "1.17"
 update-informer = "1.3"
 indicatif = "0.18"
