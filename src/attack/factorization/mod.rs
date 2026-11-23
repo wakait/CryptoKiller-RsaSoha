@@ -52,7 +52,7 @@ lazy_static! {
         Arc::new(HartAttack),
         Arc::new(KnownFactorsAttack),
         Arc::new(KraitchikAttack),
-        Arc::new(LondahlAttack),
+        // Arc::new(LondahlAttack),
         Arc::new(MersennePrimeAttack),
         Arc::new(PollardPM1Attack),
         Arc::new(PollardRhoAttack),
