@@ -2,7 +2,7 @@ name: Windows Release
 
 on:
   push:
-    branches: ["**"]
+    branches: [main]
     tags: ["v*"]
   pull_request:
     branches: [main]
@@ -33,8 +33,8 @@ jobs:
         with:
           msystem: UCRT64
           update: true
-          install: base-devel pacman-mirrors diffutils m4 make pkgconf openssl openssl-devel
-          pacboy: gcc:p rust:p
+          install: base-devel pacman-mirrors diffutils m4 make pkgconf zip
+          pacboy: gcc:p rust:p openssl:p
 
       - name: Cache Cargo and build files on D drive
         uses: actions/cache@v4
@@ -81,16 +81,29 @@ jobs:
           cp README.md LICENSE-MIT LICENSE-APACHE run.bat "$package/"
           cp examples/data.txt "$package/data.txt"
 
-          # rug links GMP dynamically; OpenSSL and the compiler runtime are also required.
-          for dll in libgmp-10.dll libmpfr-6.dll libwinpthread-1.dll libgcc_s_seh-1.dll libstdc++-6.dll libcrypto-3-x64.dll libssl-3-x64.dll; do
-            path="$(cygpath -u "$(command -v "$dll" || true)")"
-            if [ -n "$path" ] && [ -f "$path" ]; then
-              cp "$(cygpath -w "$path")" "$package/"
-            elif [ "$dll" != "libstdc++-6.dll" ]; then
-              echo "Required DLL not found: $dll" >&2
-              exit 1
-            fi
+          # Follow PE imports until the dependency closure stops changing. System DLLs
+          # stay on Windows; only MSYS2/UCRT64 runtime DLLs are bundled.
+          for round in 1 2 3 4 5 6; do
+            for file in "$package"/*.exe "$package"/*.dll; do
+              [ -f "$file" ] || continue
+              objdump -p "$file" | awk '/DLL Name:/ {print $3}'
+            done | sort -u | while read -r dll; do
+              resolved="$(command -v "$dll" || true)"
+              case "$resolved" in
+                /ucrt64/bin/*.dll|/usr/bin/*.dll|/mingw64/bin/*.dll)
+                  cp -n "$resolved" "$package/"
+                  ;;
+              esac
+            done
           done
+
+          # Prove the packaged EXE works without the build environment on PATH.
+          (
+            cd "$package"
+            PATH="$PWD:/usr/bin:/c/Windows/System32" \
+              ./rsacracker.exe --attack leaked_pq --threads 1 --json > ../packaged-result.json
+          )
+          grep -q 'rsacracker{windows_cli}' packaged-result.json
 
           (cd "$package" && sha256sum *.exe *.dll > SHA256SUMS.txt)
           zip -qr "$package.zip" "$package"

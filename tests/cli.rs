@@ -128,7 +128,7 @@ fn run_bin_in_dir(dir: &std::path::Path, args: &[&str]) -> std::process::Output 
         .expect("failed to run rsacracker binary")
 }
 
-const SIMPLE_RAW: &str = "p = 61\nq = 53\ne = 65537\nc = 284\n";
+const SIMPLE_RAW: &str = "p = 170141183460469231731687303715884105727\nq = 162259276829213363391578010288127\ne = 65537\nc = 21276652172097553670859187083144524567044111056787806718560215689585764\n";
 
 #[test]
 fn raw_known_primes_without_modulus_decrypts() {

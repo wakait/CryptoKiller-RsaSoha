@@ -3,7 +3,7 @@
 [![Windows Release](https://github.com/wakait/CryptoKiller-RsaSoha/actions/workflows/windows-release.yml/badge.svg)](https://github.com/wakait/CryptoKiller-RsaSoha/actions/workflows/windows-release.yml)
 [![CI](https://github.com/wakait/CryptoKiller-RsaSoha/actions/workflows/ci.yml/badge.svg)](https://github.com/wakait/CryptoKiller-RsaSoha/actions/workflows/ci.yml)
 
-基于 [skyf0l/RsaCacker 0.9.2](https://github.com/skyf0l/RsaCracker/tree/v9.2.0) 的 Windows RSA CTF 工具发行项目。保留上游 RSA、X509、OpenSSH、PKCS#12、PKCS#7 和 CSR 支持，并增加默认 `data.txt` 输入、JSON 接口、明确退出码和 Windows 自动打包。
+基于 [skyf0l/RsaCracker 0.9.2](https://github.com/skyf0l/RsaCracker/tree/v9.2.0) 的 Windows RSA CTF 工具发行项目。保留上游 RSA、X509、OpenSSH、PKCS#12、PKCS#7 和 CSR 支持，并增加默认 `data.txt` 输入、JSON 接口、明确退出码和 Windows 自动打包。
 
 > 仅用于授权的 CTF、教学实验和安全研究。不要用于未经授权的系统或数据。
 
@@ -37,10 +37,10 @@
 
 ```text
 # 已知 p、q 时可以不写 n，程序自动计算 n = p * q
-p = 61
-q = 53
+p = 170141183460469231731687303715884105727
+q = 162259276829213363391578010288127
 e = 65537
-c = 284
+c = 21276652172097553670859187083144524567044111056787806718560215689585764
 ```
 
 | 字段 | 含义 |
@@ -128,10 +128,10 @@ Options:
   "attack": "leaked_pq",
   "elapsed_seconds": 0.003,
   "message": {
-    "integer": "120946195742573620281919206447698189398243061007130168009797106343828557831",
+    "integer": "10962199670272155981934654169811811191204889316897352061",
     "hex": "0x727361637261636b65727b77696e646f77735f636c697d",
     "string": "rsacracker{windows_cli}",
-    "bytes": [114, 115, 97, 99, 114, 97, 99, 107, 101, 114]
+    "bytes": [114, 115, 97, 99, 114, 97, 99, 107, 101, 114, 123, 119, 105, 110, 100, 111, 119, 115, 95, 99, 108, 105, 125]
   }
 }
 ```
@@ -186,8 +186,8 @@ Windows 需要 GNU 工具链，因为 `rug` 依赖 GMP/MPFR。直接使用默认
 本地 MSYS2 UCRT64 手动构建示例：
 
 ```bash
-pacman -S --needed base-devel pacman-mirrors diffutils m4 make pkgconf openssl openssl-devel
-pacboy -S --needed gcc:p rust:p
+pacman -S --needed base-devel pacman-mirrors diffutils m4 make pkgconf zip
+pacboy -S --needed gcc:p rust:p openssl:p
 export CARGO_HOME=E:/rsacracker-cargo
 export CARGO_TARGET_DIR=E:/rsacracker-target
 cargo fmt --all -- --check

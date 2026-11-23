@@ -412,11 +412,30 @@ impl Parameters {
     /// c2 = 101112
     /// ```
     pub fn from_raw(raw: &str) -> Self {
+        let (params, errors) = Self::parse_raw(raw);
+        for error in errors {
+            eprintln!("Warning: {error}");
+        }
+        params
+    }
+
+    /// Create parameters from raw text, returning field-level parse errors.
+    pub fn try_from_raw(raw: &str) -> Result<Self, String> {
+        let (params, errors) = Self::parse_raw(raw);
+        if errors.is_empty() {
+            Ok(params)
+        } else {
+            Err(errors.join("\n"))
+        }
+    }
+
+    fn parse_raw(raw: &str) -> (Self, Vec<String>) {
         let mut params = Self::default();
+        let mut errors = Vec::new();
         let mut key_entries: std::collections::HashMap<usize, KeyEntry> =
             std::collections::HashMap::new();
 
-        for line in raw.lines() {
+        for (line_index, line) in raw.lines().enumerate() {
             let line = line.trim();
             if line.is_empty() || line.starts_with('#') || line.starts_with("//") {
                 continue;
@@ -459,11 +478,29 @@ impl Parameters {
                 (key_cleaned, None)
             };
 
-            let value = if let Ok(value) = IntegerArg::from_str(value) {
-                value.0
+            let base_key = base_key.to_lowercase();
+            let recognized = if index.is_some() {
+                matches!(base_key.as_str(), "n" | "e" | "c")
             } else {
-                eprintln!("Warning: Failed to parse {key} value: {value}");
+                matches!(
+                    base_key.as_str(),
+                    "n" | "e" | "c" | "p" | "q" | "d" | "phi" | "dp" | "dmp1" | "dq"
+                        | "dmq1" | "qinv" | "iqmp" | "pinv" | "ipmq" | "sumpq" | "diffpq"
+                )
+            };
+            if !recognized {
                 continue;
+            }
+
+            let value = match IntegerArg::from_str(value) {
+                Ok(value) => value.0,
+                Err(error) => {
+                    errors.push(format!(
+                        "line {}: invalid value for `{key}`: `{value}` ({error})",
+                        line_index + 1
+                    ));
+                    continue;
+                }
             };
 
             if let Some(idx) = index {
@@ -474,7 +511,7 @@ impl Parameters {
                     c: None,
                 });
 
-                match base_key.to_lowercase().as_str() {
+                match base_key.as_str() {
                     "n" => entry.n = Some(value),
                     "e" => entry.e = value,
                     "c" => entry.c = Some(value),
@@ -482,7 +519,7 @@ impl Parameters {
                 }
             } else {
                 // This is a regular parameter (n, e, c, etc.)
-                match base_key.to_lowercase().as_str() {
+                match base_key.as_str() {
                     "n" => params.n = Some(value),
                     "e" => params.e = value,
                     "c" => params.c = Some(value),
@@ -511,7 +548,13 @@ impl Parameters {
                 .collect();
         }
 
-        params
+        if params.n.is_none() {
+            if let (Some(p), Some(q)) = (&params.p, &params.q) {
+                params.n = Some(p * q);
+            }
+        }
+
+        (params, errors)
     }
 
     /// Create parameters from public key
