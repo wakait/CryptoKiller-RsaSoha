@@ -266,9 +266,17 @@ fn run(json: bool) -> Result<i32, Box<dyn std::error::Error>> {
 
     // List attacks
     if args.list {
-        println!("Available attacks:");
-        for attack in ATTACKS.iter() {
-            println!("  {}", attack.name());
+        if json {
+            print_json(&serde_json::json!({
+                "version": current_version,
+                "success": true,
+                "attacks": ATTACKS.iter().map(|attack| attack.name()).collect::<Vec<_>>(),
+            }));
+        } else {
+            println!("Available attacks:");
+            for attack in ATTACKS.iter() {
+                println!("  {}", attack.name());
+            }
         }
         return Ok(0);
     }
@@ -461,7 +469,15 @@ fn run(json: bool) -> Result<i32, Box<dyn std::error::Error>> {
                 .public_key_to_pem()
                 .map(|pem| String::from_utf8(pem).unwrap())
                 .unwrap();
-            print!("{pem}",);
+            if json {
+                print_json(&serde_json::json!({
+                    "version": current_version,
+                    "success": true,
+                    "public_key": pem,
+                }));
+            } else {
+                print!("{pem}");
+            }
             return Ok(0);
         } else {
             return Err("No public key found".into());

@@ -136,7 +136,7 @@ Options:
 }
 ```
 
-实际输出还取决于 `--dump`、`--dumpext`、`--factors`、`--private` 等模式；多个候选明文位于 `messages` 数组。
+实际输出还取决于 `--dump`、`--dumpext`、`--factors`、`--private` 等模式；多个候选明文位于 `messages` 数组。`--list --json` 在 `attacks` 数组返回攻击名，`--public --json` 在 `public_key` 字段返回 PEM 文本。
 
 ### PowerShell
 
