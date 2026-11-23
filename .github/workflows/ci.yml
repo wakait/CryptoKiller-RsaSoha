@@ -38,20 +38,29 @@ jobs:
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@stable
       - uses: swatinem/rust-cache@v2
-      - name: Diagnose PKCS1 public key test termination
+      - name: Diagnose X509 CSR key test termination
         continue-on-error: true
         run: |
           set +e
           /usr/bin/time -v timeout --kill-after=10s 180s \
-            cargo test --all-features --locked --test keys public_rsa_pkcs1_pem -- --exact --nocapture \
+            cargo test --all-features --locked --test keys x509_csr_der -- --exact --nocapture \
             > /tmp/rsacracker-key-diagnostic.log 2>&1
           status=$?
           cat /tmp/rsacracker-key-diagnostic.log
           echo "diagnostic_status=$status"
-          for file in memory.max memory.peak memory.events; do
-            if [ -r "/sys/fs/cgroup/$file" ]; then
-              echo "=== cgroup $file ==="
-              cat "/sys/fs/cgroup/$file"
+          echo '=== process cgroup ==='
+          cat /proc/self/cgroup
+          for file in \
+            /sys/fs/cgroup/memory.max \
+            /sys/fs/cgroup/memory.peak \
+            /sys/fs/cgroup/memory.events \
+            /sys/fs/cgroup/memory/memory.limit_in_bytes \
+            /sys/fs/cgroup/memory/memory.max_usage_in_bytes \
+            /sys/fs/cgroup/memory/memory.failcnt \
+            /sys/fs/cgroup/memory/memory.oom_control; do
+            if [ -r "$file" ]; then
+              echo "=== $file ==="
+              cat "$file"
             fi
           done
           exit 0
