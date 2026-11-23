@@ -42,7 +42,7 @@ jobs:
         run: |
           set +e
           cargo test --all-features --locked --test keys --no-run
-          test_bin=$(find target/debug/deps -maxdepth 1 -type f -name 'keys-*' -perm -111 -printf '%T@ %p\n' | sort -nr | head -1 | cut -d' ' -f2-)
+          test_bin=$(find target/debug -type f -name 'keys-*' -perm -111 -printf '%T@ %p\n' | sort -nr | head -1 | cut -d' ' -f2-)
           echo "test_binary=$test_bin"
           /usr/bin/time -v timeout --kill-after=10s 180s \
             "$test_bin" x509_csr_der --exact --nocapture \
