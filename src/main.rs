@@ -2,7 +2,6 @@ use clap::Parser;
 use discrete_logarithm::discrete_log_with_factors;
 use display_bytes::display_bytes;
 use itertools::Itertools;
-use main_error::MainError;
 use rug::{
     integer::{IsPrime, Order},
     Integer,
@@ -228,7 +227,7 @@ fn main() -> ExitCode {
     }
 }
 
-fn run(json: bool) -> Result<i32, MainError> {
+fn run(json: bool) -> Result<i32, Box<dyn std::error::Error>> {
     let args = match Args::try_parse() {
         Ok(args) => args,
         Err(error) => {
@@ -275,7 +274,7 @@ fn run(json: bool) -> Result<i32, MainError> {
     }
 
     // Read all cipherfiles into a vector
-    let cipherfiles_data: Result<Vec<Integer>, MainError> = args
+    let cipherfiles_data: Result<Vec<Integer>, Box<dyn std::error::Error>> = args
         .cipherfile
         .iter()
         .map(|cipher_path| match std::fs::read(cipher_path) {
@@ -684,5 +683,5 @@ fn run(json: bool) -> Result<i32, MainError> {
         }
     }
 
-    Ok(())
+    Ok(0)
 }
