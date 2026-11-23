@@ -865,6 +865,24 @@ mod tests {
     }
 
     #[test]
+    fn strict_raw_parser_reports_invalid_field() {
+        let error = Parameters::try_from_raw("# comment\nn = invalid\n").unwrap_err();
+        assert!(error.contains("n"));
+        assert!(error.contains("invalid"));
+    }
+
+    #[test]
+    fn strict_raw_parser_accepts_whitespace_and_comments() {
+        let params = Parameters::try_from_raw(
+            "  # comment\n p : 0x3d \n // another comment\nq=0o65\nc = 284\n",
+        )
+        .unwrap();
+        assert_eq!(params.p, Some(Integer::from(61)));
+        assert_eq!(params.q, Some(Integer::from(53)));
+        assert_eq!(params.n, Some(Integer::from(61 * 53)));
+    }
+
+    #[test]
     fn parse_full_prime() {
         let arg = PartialPrimeArg::from_str("0xDEADBEEF").unwrap();
         match arg.0 {
