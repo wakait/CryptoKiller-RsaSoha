@@ -1,0 +1,140 @@
+name: Windows Release
+
+on:
+  push:
+    branches: [main]
+    tags: ["v*"]
+  pull_request:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+env:
+  RUST_BACKTRACE: 1
+  NO_FACTORDB: 1
+  RSACRACKER_DISABLE_UPDATE: 1
+  CARGO_HOME: D:/rsacracker-cargo
+  CARGO_TARGET_DIR: D:/rsacracker-target
+  MSYS2_PATH_TYPE: inherit
+
+jobs:
+  verify:
+    name: Verify on Windows
+    runs-on: windows-latest
+    timeout-minutes: 90
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install MSYS2 UCRT64 toolchain
+        uses: msys2/setup-msys2@v2
+        with:
+          msystem: UCRT64
+          update: true
+          install: base-devel pacman-mirrors diffutils m4 make pkgconf zip
+          pacboy: gcc:p rust:p openssl:p
+
+      - name: Cache Cargo and build files on D drive
+        uses: actions/cache@v4
+        with:
+          path: |
+            D:/rsacracker-cargo/registry
+            D:/rsacracker-target
+          key: windows-gnu-${{ runner.os }}-${{ hashFiles('Cargo.lock') }}
+          restore-keys: windows-gnu-${{ runner.os }}-
+
+      - name: Check formatting
+        shell: msys2 {0}
+        run: cargo fmt --all -- --check
+
+      - name: Lint
+        shell: msys2 {0}
+        run: cargo clippy --all-targets --all-features --locked -- -D warnings
+
+      - name: Test
+        shell: msys2 {0}
+        run: cargo test --all-features --locked --lib --bins --test cli --test keys --test multi_key
+
+      - name: Build release
+        shell: msys2 {0}
+        run: cargo build --release --locked --target x86_64-pc-windows-gnu
+
+      - name: Smoke test release binary
+        shell: msys2 {0}
+        run: |
+          BIN="$CARGO_TARGET_DIR/x86_64-pc-windows-gnu/release/rsacracker.exe"
+          "$BIN" --version
+          "$BIN" --list > /dev/null
+          "$BIN" --raw examples/data.txt --attack leaked_pq --threads 1 > smoke-result.txt
+          grep -q 'rsacracker{windows_cli}' smoke-result.txt
+
+      - name: Package Windows distribution
+        shell: msys2 {0}
+        run: |
+          set -euo pipefail
+          package="rsacracker-windows-x86_64"
+          rm -rf "$package"
+          mkdir -p "$package"
+          cp "$CARGO_TARGET_DIR/x86_64-pc-windows-gnu/release/rsacracker.exe" "$package/"
+          cp README.md LICENSE-MIT LICENSE-APACHE run.bat "$package/"
+          cp examples/data.txt "$package/data.txt"
+
+          # Follow PE imports until the dependency closure stops changing. System DLLs
+          # stay on Windows; only MSYS2/UCRT64 runtime DLLs are bundled.
+          for round in 1 2 3 4 5 6; do
+            for file in "$package"/*.exe "$package"/*.dll; do
+              [ -f "$file" ] || continue
+              objdump -p "$file" | awk '/DLL Name:/ {print $3}'
+            done | sort -u | while read -r dll; do
+              resolved="$(command -v "$dll" || true)"
+              case "$resolved" in
+                /ucrt64/bin/*.dll|/usr/bin/*.dll|/mingw64/bin/*.dll)
+                  cp -n "$resolved" "$package/"
+                  ;;
+              esac
+            done
+          done
+
+          # Prove the packaged EXE works without the build environment on PATH.
+          (
+            cd "$package"
+            PATH="$PWD:/usr/bin:/c/Windows/System32" \
+              ./rsacracker.exe --attack leaked_pq --threads 1 --json > ../packaged-result.json
+          )
+          grep -q 'rsacracker{windows_cli}' packaged-result.json
+
+          (cd "$package" && sha256sum *.exe *.dll > SHA256SUMS.txt)
+          zip -qr "$package.zip" "$package"
+
+      - name: Upload Windows ZIP
+        uses: actions/upload-artifact@v4
+        with:
+          name: rsacracker-windows-x86_64
+          path: rsacracker-windows-x86_64.zip
+          if-no-files-found: error
+          retention-days: 30
+
+  release:
+    name: Publish GitHub Release
+    needs: verify
+    if: startsWith(github.ref, 'refs/tags/v')
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+
+    permissions:
+      contents: write
+
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          name: rsacracker-windows-x86_64
+          path: release
+
+      - name: Publish release asset
+        uses: softprops/action-gh-release@v2
+        with:
+          files: release/rsacracker-windows-x86_64.zip
+          fail_on_unmatched_files: true
+          generate_release_notes: true

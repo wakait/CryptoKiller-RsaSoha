@@ -1,0 +1,17 @@
+{
+  $schema: "https://docs.renovatebot.com/renovate-schema.json",
+  extends: [
+    "config:recommended",
+    ":configMigration",
+    ":label(dependencies)",
+    ":automergeMajor",
+    ":maintainLockFilesWeekly",
+  ],
+  packageRules: [
+    {
+      matchManagers: ["cargo"],
+      groupName: "rust dependencies",
+      schedule: ["* 0-3 * * 1"],
+    },
+  ],
+}
