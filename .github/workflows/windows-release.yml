@@ -34,7 +34,14 @@ jobs:
           msystem: UCRT64
           update: true
           install: base-devel pacman-mirrors diffutils m4 make pkgconf zip
-          pacboy: gcc:p rust:p openssl-devel:p
+          pacboy: gcc:p rust:p openssl:p
+
+      - name: Configure OpenSSL paths
+        shell: msys2 {0}
+        run: |
+          test -f /ucrt64/include/openssl/ssl.h
+          test -f /ucrt64/lib/libssl.a
+          echo "OPENSSL_DIR=$(cygpath -m /ucrt64)" >> "$GITHUB_ENV"
 
       - name: Cache Cargo and build files on D drive
         uses: actions/cache@v4
