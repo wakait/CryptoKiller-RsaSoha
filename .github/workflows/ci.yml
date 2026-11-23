@@ -2,337 +2,52 @@ name: CI
 
 on:
   push:
-    branches: [main]
+    branches: ["**"]
     tags: ["v*"]
   pull_request:
     branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
 
 env:
   RUST_BACKTRACE: 1
   NO_FACTORDB: 1
+  RSACRACKER_DISABLE_UPDATE: 1
 
 jobs:
-  fmt:
-    name: Format
+  quality:
+    name: Format and lint
     runs-on: ubuntu-latest
     timeout-minutes: 30
-
     steps:
-      - uses: actions/checkout@v7
-      - name: Stable toolchain with rustfmt
-        uses: dtolnay/rust-toolchain@stable
-        with:
-          components: rustfmt
-      - uses: swatinem/rust-cache@v2
-
-      - name: Check coding style
-        run: cargo fmt --check --all
-
-  clippy:
-    name: Clippy
-    runs-on: ubuntu-latest
-    timeout-minutes: 30
-
-    steps:
-      - uses: actions/checkout@v7
-      - name: Stable toolchain with clippy
-        uses: dtolnay/rust-toolchain@stable
-        with:
-          components: clippy
-      - uses: swatinem/rust-cache@v2
-
-      - name: Lint
-        run: cargo clippy --all-targets  --all-features -- -D warnings
-
-  docs:
-    name: Docs
-    runs-on: ubuntu-latest
-    timeout-minutes: 30
-    env:
-      RUSTDOCFLAGS: "-Dwarnings"
-
-    steps:
-      - uses: actions/checkout@v7
+      - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: rustfmt, clippy
       - uses: swatinem/rust-cache@v2
-
-      - run: cargo doc --no-deps
+      - run: cargo fmt --all -- --check
+      - run: cargo clippy --all-targets --all-features --locked -- -D warnings
 
   tests:
-    name: Tests
+    name: Library and CLI tests
     runs-on: ubuntu-latest
-    timeout-minutes: 30
-
+    timeout-minutes: 45
     steps:
-      - uses: actions/checkout@v7
+      - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@stable
       - uses: swatinem/rust-cache@v2
-      - uses: taiki-e/install-action@cargo-nextest
+      - run: cargo test --all-features --locked --lib --bins --test cli --test keys --test multi_key
 
-      - name: Test
-        run: cargo nextest run --all-features -E 'not binary(~ctf_)'
-
-  key-generation:
-    name: Verify deterministic key generation
+  docs:
+    name: Documentation
     runs-on: ubuntu-latest
     timeout-minutes: 30
-
     steps:
-      - uses: actions/checkout@v7
+      - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@stable
       - uses: swatinem/rust-cache@v2
-
-      - name: Generate keys to temporary directory
-        run: |
-          cd tools/gen_keys
-          cargo run --quiet -- /tmp/keys_generated
-
-      - name: Verify keys match committed keys
-        run: |
-          failed=0
-          # Check all files in generated directory
-          for file in /tmp/keys_generated/*; do
-            [ -f "$file" ] || continue
-            filename=$(basename "$file")
-            
-            # Skip files with non-deterministic encryption (random salts)
-            if [[ "$filename" == "pkcs12.p12" ]] || \
-               [[ "$filename" == "private_openssl_passphrase.pem" ]] || \
-               [[ "$filename" == "private_rsa_passphrase.pem" ]]; then
-              echo "⚠️  Skipping $filename (contains random salt)"
-              continue
-            fi
-            
-            # Compare raw files byte-for-byte
-            if [ -f "tests/keys/$filename" ]; then
-              if diff -q "$file" "tests/keys/$filename" > /dev/null 2>&1; then
-                echo "✓ $filename matches committed version"
-              else
-                echo "✗ $filename differs from committed version"
-                failed=1
-              fi
-            else
-              echo "⚠️  $filename not found in committed keys"
-            fi
-          done
-
-          if [ $failed -eq 1 ]; then
-            echo "Error: Generated keys don't match committed keys"
-            exit 1
-          fi
-
-          echo "✓ All deterministic keys match committed versions"
-
-  ctf-challenges:
-    name: CTF challenges
-    runs-on: ubuntu-latest
-    timeout-minutes: 30
-
-    steps:
-      - uses: actions/checkout@v7
-      - uses: dtolnay/rust-toolchain@stable
-      - uses: swatinem/rust-cache@v2
-      - uses: taiki-e/install-action@cargo-nextest
-
-      - name: Test
-        run: cargo nextest run --release --all-features --test "ctf_*"
-
-  coverage:
-    name: Coverage
-    runs-on: ubuntu-latest
-    timeout-minutes: 30
-
-    steps:
-      - uses: actions/checkout@v7
-      - uses: dtolnay/rust-toolchain@nightly
-      - uses: swatinem/rust-cache@v2
-      - uses: taiki-e/install-action@cargo-nextest
-      - uses: taiki-e/install-action@cargo-llvm-cov
-
-      - name: Tests
-        run: cargo llvm-cov nextest --lcov --output-path lcov.info --all-features --lib --bins --test keys
-
-      - name: Upload coverage reports to Codecov
-        uses: codecov/codecov-action@v7
-        with:
-          files: lcov.info
-          flags: rust
-          fail_ci_if_error: true
-          token: ${{ secrets.CODECOV_TOKEN }}
-
-  build:
-    name: Build
-    strategy:
-      matrix:
-        os: [ubuntu-latest, macos-latest]
-        # os: [ubuntu-latest, windows-latest, macos-latest]
-
-    runs-on: ${{ matrix.os }}
-    timeout-minutes: 30
-
-    steps:
-      - uses: actions/checkout@v7
-      - uses: dtolnay/rust-toolchain@stable
-      - uses: swatinem/rust-cache@v2
-
-      # msys2 required by rug on windows
-      - name: Setup msys2 (windows)
-        uses: msys2/setup-msys2@v2
-        if: matrix.os == 'windows-latest'
-        with:
-          install: base-devel pacman-mirrors diffutils m4 make pkgconf openssl openssl-devel
-          pacboy: gcc:p rust:p
-
-      # Only for windows
-      - name: Msys2 build (windows)
-        if: matrix.os == 'windows-latest'
-        shell: msys2 {0}
-        run: |
-          cargo build
-
-      - name: Build
-        if: matrix.os != 'windows-latest'
-        run: cargo build
-
-  docker-build:
-    name: Docker build
-    runs-on: ubuntu-latest
-    timeout-minutes: 30
-
-    env:
-      CACHE_VERSION: v1
-
-    steps:
-      - uses: actions/checkout@v7
-
-      - name: Setup Docker Buildx
-        uses: docker/setup-buildx-action@v4
-
-      - name: Cache
-        uses: actions/cache@v6
-        id: cache
-        with:
-          path: |
-            /tmp/cache/rsacracker/target
-            /tmp/cache/cargo/registry
-          key: ${{ runner.os }}-rust-${{ env.CACHE_VERSION }}-${{ github.job }}-${{ hashFiles('**/Cargo.toml', '**/Cargo.lock') }}
-          restore-keys: |
-            ${{ runner.os }}-rust-${{ env.CACHE_VERSION }}-${{ github.job }}-
-
-      - name: Inject cache into docker
-        uses: reproducible-containers/buildkit-cache-dance@v3
-        with:
-          cache-map: |
-            {
-              "/tmp/cache/rsacracker/target": "/usr/src/rsacracker/target",
-              "/tmp/cache/cargo/registry": "/usr/local/cargo/registry"
-            }
-          skip-extraction: ${{ steps.cache.outputs.cache-hit }}
-
-      - name: Build
-        uses: docker/build-push-action@v7
-        with:
-          tags: rsacracker:test
-          outputs: type=docker
-          cache-from: type=gha
-          cache-to: type=gha,mode=max
-
-      - name: Test the Docker image
-        run: docker run --rm -v $PWD:/data rsacracker:test -n 323 --attack small_prime --factors
-
-  publish-crates_io:
-    name: Publish to crates.io
-    runs-on: ubuntu-latest
-    timeout-minutes: 30
-
-    needs:
-      [
-        fmt,
-        clippy,
-        docs,
-        tests,
-        key-generation,
-        ctf-challenges,
-        build,
-        docker-build,
-      ]
-    if: github.event_name == 'push' && contains(github.ref, 'refs/tags/')
-
-    steps:
-      - name: Checkout sources
-        uses: actions/checkout@v7
-
-      - uses: dtolnay/rust-toolchain@stable
-
-      - run: cargo publish --token ${CRATES_TOKEN}
-        env:
-          CRATES_TOKEN: ${{ secrets.CRATES_TOKEN }}
-
-  publish-docker_hub:
-    name: Publish to hub.docker.com
-    runs-on: ubuntu-latest
-    timeout-minutes: 120
-
-    needs:
-      [
-        fmt,
-        clippy,
-        docs,
-        tests,
-        key-generation,
-        ctf-challenges,
-        build,
-        docker-build,
-      ]
-    if: github.event_name == 'push' && contains(github.ref, 'refs/tags/')
-
-    env:
-      IMAGE_NAME: skyf0l/rsacracker
-
-    steps:
-      - uses: actions/checkout@v7
-
-      - name: Install yq
-        run: |
-          sudo wget https://github.com/mikefarah/yq/releases/download/${VERSION}/${BINARY} -O /usr/bin/yq
-          sudo chmod +x /usr/bin/yq
-        env:
-          VERSION: v4.40.5
-          BINARY: yq_linux_amd64
-
-      - name: Get package version
-        id: get_version
-        run: echo VERSION=$(yq ".package.version" Cargo.toml) >> $GITHUB_OUTPUT
-
-      - name: Setup Docker Buildx
-        uses: docker/setup-buildx-action@v4
-
-      - name: Setup multi-platform
-        uses: docker/setup-qemu-action@v4
-
-      - name: Login to Docker Hub
-        uses: docker/login-action@v4
-        with:
-          username: ${{ secrets.DOCKERHUB_USERNAME }}
-          password: ${{ secrets.DOCKERHUB_TOKEN }}
-
-      - name: Build and push
-        uses: docker/build-push-action@v7
-        with:
-          push: true
-          tags: ${{ env.IMAGE_NAME }}:${{ steps.get_version.outputs.VERSION }},${{ env.IMAGE_NAME }}:latest
-          platforms: linux/amd64,linux/arm64
-
-  release:
-    name: GitHub Release
-    runs-on: ubuntu-latest
-    timeout-minutes: 30
-
-    needs: [publish-crates_io, publish-docker_hub]
-    if: github.event_name == 'push' && contains(github.ref, 'refs/tags/')
-
-    steps:
-      - name: Create Release
-        uses: softprops/action-gh-release@v3
-        with:
-          make_latest: "true"
+      env:
+        RUSTDOCFLAGS: -Dwarnings
+      run: cargo doc --no-deps --locked

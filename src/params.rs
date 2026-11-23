@@ -857,6 +857,14 @@ mod tests {
     use super::*;
 
     #[test]
+    fn raw_derives_modulus_from_known_primes() {
+        let params = Parameters::from_raw("p = 61\nq = 53\nc = 2790\n");
+        assert_eq!(params.p, Some(Integer::from(61)));
+        assert_eq!(params.q, Some(Integer::from(53)));
+        assert_eq!(params.n, Some(Integer::from(61 * 53)));
+    }
+
+    #[test]
     fn parse_full_prime() {
         let arg = PartialPrimeArg::from_str("0xDEADBEEF").unwrap();
         match arg.0 {

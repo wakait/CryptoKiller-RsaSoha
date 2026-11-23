@@ -9,5 +9,24 @@ target/
 # MSVC Windows builds of rustc generate these, which store debugging information
 *.pdb
 
+# Local Windows binaries and dependency files
+/*.exe
+/*.dll
+/*.pdb
+/*.rlib
+/*.d
+/.fingerprint/
+/build/
+/deps/
+/incremental/
+
+# Local challenge input (examples/data.txt is the tracked template)
+/data.txt
+
+# Packaging output
+/rsacracker-windows-x86_64/
+/rsacracker-windows-x86_64.zip
+/smoke-result.txt
+
 # Other
 .vscode
