@@ -111,7 +111,7 @@ fn to_pem() {
     let pk = solution.pk.unwrap();
 
     assert_eq!(
-        pk.to_pem(&None).unwrap(),
-        include_str!("keys/private_rsa.pem")
+        pk.to_pem(&None).unwrap().replace("\r\n", "\n"),
+        include_str!("keys/private_rsa.pem").replace("\r\n", "\n")
     );
 }
