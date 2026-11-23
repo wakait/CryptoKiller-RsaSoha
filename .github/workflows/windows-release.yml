@@ -62,7 +62,7 @@ jobs:
 
       - name: Test
         shell: msys2 {0}
-        run: cargo test --all-features --locked --lib --bins --test cli --test keys --test multi_key
+        run: cargo test --all-features --locked --lib --bins --test cli --test keys --test multi_key -- --test-threads=2
 
       - name: Build release
         shell: msys2 {0}

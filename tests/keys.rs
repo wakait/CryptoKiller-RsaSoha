@@ -1,6 +1,6 @@
 use std::str::FromStr;
 
-use rsacracker::{integer_to_string, run_attacks_with_threads, Parameters};
+use rsacracker::{integer_to_string, run_attacks, Parameters};
 use rug::Integer;
 
 const PLAINTEXT: &str = "RsaCracker";
@@ -20,7 +20,7 @@ macro_rules! public_key_test {
             } + Parameters::from_public_key(include_bytes!(concat!("keys/", $key)))
                 .unwrap();
 
-            let solution = run_attacks_with_threads(&params, 1).unwrap();
+            let solution = run_attacks(&params).unwrap();
             assert!(solution.pk.is_some());
             assert_eq!(integer_to_string(&solution.m.unwrap()).unwrap(), PLAINTEXT);
         }
@@ -55,7 +55,7 @@ macro_rules! private_key_test {
             )
             .unwrap();
 
-            let solution = run_attacks_with_threads(&params, 1).unwrap();
+            let solution = run_attacks(&params).unwrap();
             assert!(solution.pk.is_some());
             assert_eq!(integer_to_string(&solution.m.unwrap()).unwrap(), PLAINTEXT);
         }
@@ -91,7 +91,7 @@ fn pkcs12() {
         } + Parameters::from_private_key(include_bytes!("keys/pkcs12.p12"), Some("test123"))
             .unwrap();
 
-    let solution = run_attacks_with_threads(&params, 1).unwrap();
+    let solution = run_attacks(&params).unwrap();
     assert!(solution.pk.is_some());
     assert_eq!(integer_to_string(&solution.m.unwrap()).unwrap(), PLAINTEXT);
 }
@@ -107,7 +107,7 @@ fn to_pem() {
     )
     .unwrap();
 
-    let solution = run_attacks_with_threads(&params, 1).unwrap();
+    let solution = run_attacks(&params).unwrap();
     let pk = solution.pk.unwrap();
 
     assert_eq!(
