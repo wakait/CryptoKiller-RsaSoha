@@ -39,11 +39,13 @@ jobs:
       - uses: dtolnay/rust-toolchain@stable
       - uses: swatinem/rust-cache@v2
       - name: Diagnose X509 CSR key test termination
-        continue-on-error: true
         run: |
           set +e
+          cargo test --all-features --locked --test keys --no-run
+          test_bin=$(find target/debug/deps -maxdepth 1 -type f -name 'keys-*' -perm -111 -printf '%T@ %p\n' | sort -nr | head -1 | cut -d' ' -f2-)
+          echo "test_binary=$test_bin"
           /usr/bin/time -v timeout --kill-after=10s 180s \
-            cargo test --all-features --locked --test keys x509_csr_der -- --exact --nocapture \
+            "$test_bin" x509_csr_der --exact --nocapture \
             > /tmp/rsacracker-key-diagnostic.log 2>&1
           status=$?
           cat /tmp/rsacracker-key-diagnostic.log
@@ -63,7 +65,8 @@ jobs:
               cat "$file"
             fi
           done
-          exit 0
+          echo 'Diagnostic complete; stopping before the full suite.'
+          exit 1
       - run: cargo test --all-features --locked --lib --bins --test cli --test keys --test multi_key -- --test-threads=2
 
   docs:
