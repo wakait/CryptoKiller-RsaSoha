@@ -6,6 +6,36 @@ fn run_bin(args: &[&str]) -> std::process::Output {
         .expect("failed to run rsacracker binary")
 }
 
+#[test]
+fn help_is_chinese_for_short_and_long_flags() {
+    for flag in ["-h", "--help"] {
+        let output = run_bin(&[flag]);
+        assert!(output.status.success(), "{flag} should exit successfully");
+
+        let stdout = String::from_utf8_lossy(&output.stdout);
+        for expected in [
+            "用法:",
+            "选项:",
+            "从 raw 文件读取参数",
+            "显示帮助信息",
+            "显示版本信息",
+            "--json",
+            "--attack",
+        ] {
+            assert!(
+                stdout.contains(expected),
+                "{flag} help is missing {expected:?}:\n{stdout}"
+            );
+        }
+        for english in ["Usage:", "Options:", "Print help", "Print version"] {
+            assert!(
+                !stdout.contains(english),
+                "{flag} help still contains {english:?}:\n{stdout}"
+            );
+        }
+    }
+}
+
 // picoCTF 2019 b00tl3gRSA2 parameters (Wiener attack)
 const N: &str = "93596195645610503452177719837666902345047461004926714393186384188598288812343005592124086521572864457489909063543756427769917131437307447863586528928496194559057760628385975297585140789577911616474493538014622500120560643072265673362843715324209056486085041020831625385434745566998218712055519575753745124619";
 const E: &str = "1595235523996321655798747471789583440185208568327862733680046250799766370193739982702940394656406146131440688831932739213253542820322450207724280220533900355744553772981019201731036379810734890063829650829319133004906034534031330743611288482822751674556919861911431941749713177767003275664528498846275096193";

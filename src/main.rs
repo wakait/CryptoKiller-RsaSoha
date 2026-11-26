@@ -35,98 +35,106 @@ impl std::str::FromStr for AttackArg {
 }
 
 #[derive(Parser, Debug, Clone)]
-#[command(author, version, about)]
+#[command(
+    author,
+    version,
+    about = "面向 CTF 的 RSA 破解工具，支持 RSA、X509、OPENSSH、PKCS#12、PKCS#7 和 CSR（PEM/DER）密钥。",
+    override_usage = "rsacracker [选项]",
+    disable_help_flag = true,
+    disable_version_flag = true,
+    help_template = "{about}\n\n用法: {usage}\n\n选项:\n{options}"
+)]
 // IMPORTANT: When modifying CLI arguments, ALWAYS update the README.md Usage section
 // to match the --help output. The README should reflect the actual CLI behavior.
 struct Args {
-    /// Retrieve values from raw file
+    /// 从 raw 文件读取参数
     #[clap(short, long, alias = "input")]
     raw: Option<String>,
-    /// Print a machine-readable JSON report to stdout.
+    /// 输出可供机器读取的 JSON 报告。
     #[clap(long)]
     json: bool,
-    /// Cipher: the message to uncipher. Can be specified multiple times for multi-key attacks.
+    /// 待解密的密文整数；可多次指定以进行多密钥攻击。
     #[clap(short, long)]
     cipher: Vec<IntegerArg>,
-    /// Cipher file: the file to uncipher. Can be specified multiple times for multi-key attacks.
+    /// 密文文件；可多次指定以进行多密钥攻击。
     #[clap(short = 'f', long)]
     cipherfile: Vec<std::path::PathBuf>,
-    /// Write unciphered data to a file. If many unciphered data are found, they will be written to files suffixed with _1, _2, ...
+    /// 将解密结果写入文件；多个结果将使用 _1、_2 等后缀。
     #[clap(short = 'o', long)]
     outfile: Option<std::path::PathBuf>,
-    /// Modulus. Can be specified multiple times for multi-key attacks.
+    /// RSA 模数；可多次指定以进行多密钥攻击。
     #[clap(short)]
     n: Vec<IntegerArg>,
-    /// Public exponent. Default: 65537. Can be specified multiple times for multi-key attacks.
+    /// 公钥指数，默认 65537；可多次指定以进行多密钥攻击。
     #[clap(short)]
     e: Vec<IntegerArg>,
-    /// Prime number p (supports wildcards: 0xDEADBEEF????, 10737418??, 0x...C0FFEE, 0xDEADBEEF..., etc.)
+    /// 素数 p；支持通配符，例如 0xDEADBEEF????、10737418??、0x...C0FFEE。
     #[clap(short)]
     p: Option<PartialPrimeArg>,
-    /// Prime number q (supports wildcards: 0x????C0FFEE, ??741827, 0x...C0FFEE, 0xDEADBEEF..., etc.)
+    /// 素数 q；支持通配符，例如 0x????C0FFEE、??741827、0x...C0FFEE。
     #[clap(short)]
     q: Option<PartialPrimeArg>,
-    /// Private exponent.
+    /// 私钥指数。
     #[clap(short)]
     d: Option<IntegerArg>,
-    /// Phi or Euler's totient function of n. (p-1)(q-1)
+    /// n 的欧拉函数 phi，即 (p-1)(q-1)。
     #[clap(long)]
     phi: Option<IntegerArg>,
-    /// dP or dmp1 CRT exponent. (d mod p-1)
+    /// CRT 指数 dP（别名 dmp1）：d mod (p-1)。
     #[clap(long, alias = "dmp1")]
     dp: Option<IntegerArg>,
-    /// dQ or dmq1 CRT exponent. (d mod q-1)
+    /// CRT 指数 dQ（别名 dmq1）：d mod (q-1)。
     #[clap(long, alias = "dmq1")]
     dq: Option<IntegerArg>,
-    /// qInv or iqmp CRT coefficient. (q^-1 mod p)
+    /// CRT 系数 qInv（别名 iqmp）：q^-1 mod p。
     #[clap(long, alias = "iqmp")]
     qinv: Option<IntegerArg>,
-    /// pInv or ipmq CRT coefficient. (p^-1 mod q)
+    /// CRT 系数 pInv（别名 ipmq）：p^-1 mod q。
     #[clap(long, alias = "ipmq")]
     pinv: Option<IntegerArg>,
-    /// The sum of the two primes p and q.
+    /// 两个素因子 p 与 q 的和。
     #[clap(long)]
     sum_pq: Option<IntegerArg>,
-    /// The difference of the two primes p and q.
+    /// 两个素因子 p 与 q 的差。
     #[clap(long)]
     diff_pq: Option<IntegerArg>,
-    /// Discrete logarithm attack. When c and e are swapped in the RSA encryption formula. (e^c mod n)
+    /// 离散对数攻击：RSA 公式中的 c 与 e 互换时使用（e^c mod n）。
     #[clap(long, alias = "dislog")]
     dlog: bool,
-    /// Public or private key file(s). (RSA, X509, OPENSSH, PKCS#12, PKCS#7, CSR in PEM and DER formats.) Can be specified multiple times for multi-key attacks.
+    /// 公钥或私钥文件，支持 RSA、X509、OPENSSH、PKCS#12、PKCS#7、CSR 的 PEM/DER 格式；可多次指定。
     #[clap(short, long)]
     key: Vec<String>,
-    /// Private key password/passphrase if encrypted.
+    /// 加密私钥的密码或口令。
     #[clap(long)]
     password: Option<String>,
-    /// Print the public key in PEM format.
+    /// 输出 PEM 格式的公钥。
     #[clap(long)]
     public: bool,
-    /// Print the private key in PEM format.
+    /// 输出 PEM 格式的私钥。
     #[clap(long)]
     private: bool,
-    /// Add a password/passphrase to the private key.
+    /// 为输出的私钥添加密码或口令。
     #[clap(long, requires("private"))]
     addpassword: Option<String>,
-    /// Print all the input parameters.
+    /// 显示全部输入参数。
     #[clap(long)]
     showinputs: bool,
-    /// Print the private RSA key variables n, e, p, q and d.
+    /// 输出 RSA 私钥变量 n、e、p、q 和 d。
     #[clap(long)]
     dump: bool,
-    /// Print the extended RSA key variables n, e, p, q, d, dP, dQ, pInv and qInv.
+    /// 输出扩展 RSA 私钥变量 n、e、p、q、d、dP、dQ、pInv 和 qInv。
     #[clap(long)]
     dumpext: bool,
-    /// Print all factors of n.
+    /// 输出 n 的全部素因子。
     #[clap(long)]
     factors: bool,
-    /// Show bit length for all displayed values.
+    /// 在显示的数值后添加比特长度。
     #[clap(long)]
     bits: bool,
-    /// Number of threads to use. Default: number of CPUs
+    /// 使用的线程数，默认使用 CPU 核心数。
     #[clap(short, long, default_value_t = num_cpus::get())]
     threads: usize,
-    /// Specify attacks to run. Default: all. (e.g. --attacks ecm,wiener,sparse)
+    /// 指定要运行的攻击，默认全部；可用逗号分隔多个攻击。
     #[clap(
         short,
         long,
@@ -135,12 +143,28 @@ struct Args {
         conflicts_with = "exclude"
     )]
     attack: Option<Vec<AttackArg>>,
-    /// Specify attacks to exclude. Default: none. (e.g. --exclude ecm,wiener,sparse)
+    /// 指定要排除的攻击，默认不排除；可用逗号分隔多个攻击。
     #[clap(long, value_delimiter = ',', conflicts_with = "attack")]
     exclude: Option<Vec<AttackArg>>,
-    /// List all available attacks.
+    /// 列出全部可用攻击。
     #[clap(long)]
     list: bool,
+    #[arg(
+        id = "help",
+        short = 'h',
+        long = "help",
+        action = clap::ArgAction::Help,
+        help = "显示帮助信息"
+    )]
+    _help: Option<bool>,
+    #[arg(
+        id = "version",
+        short = 'V',
+        long = "version",
+        action = clap::ArgAction::Version,
+        help = "显示版本信息"
+    )]
+    _version: Option<bool>,
 }
 
 fn display_value(label: &str, value: &Integer, show_bits: bool) {

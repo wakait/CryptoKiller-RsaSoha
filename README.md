@@ -73,44 +73,48 @@ c = 21276652172097553670859187083144524567044111056787806718560215689585764
 
 ## 命令行参数
 
-```text
-Usage: rsacracker [OPTIONS]
+`-h` 与 `--help` 均显示中文帮助：
 
-Options:
-  -r, --raw <RAW>                  Retrieve values from raw file (alias: --input)
-  -c, --cipher <CIPHER>            Cipher: the message to uncipher. Can be specified multiple times for multi-key attacks.
-  -f, --cipherfile <CIPHERFILE>    Cipher file: the file to uncipher. Can be specified multiple times for multi-key attacks.
-  -o, --outfile <OUTFILE>          Write unciphered data to a file. If many unciphered data are found, they will be written to files suffixed with _1, _2, ...
-  -n <N>                           Modulus. Can be specified multiple times for multi-key attacks.
-  -e <E>                           Public exponent. Default: 65537. Can be specified multiple times for multi-key attacks.
-  -p <P>                           Prime number p (supports wildcards: 0xDEADBEEF????, 10737418??, 0x...C0FFEE, 0xDEADBEEF..., etc.)
-  -q <Q>                           Prime number q (supports wildcards: 0x????C0FFEE, ??741827, 0x...C0FFEE, 0xDEADBEEF..., etc.)
-  -d <D>                           Private exponent.
-      --phi <PHI>                  Phi or Euler's totient function of n. (p-1)(q-1)
-      --dp <DP>                    dP or dmp1 CRT exponent. (d mod p-1)
-      --dq <DQ>                    dQ or dmq1 CRT exponent. (d mod q-1)
-      --qinv <QINV>                qInv or iqmp CRT coefficient. (q^-1 mod p)
-      --pinv <PINV>                pInv or ipmq CRT coefficient. (p^-1 mod q)
-      --sum-pq <SUM_PQ>            The sum of the two primes p and q.
-      --diff-pq <DIFF_PQ>          The difference of the two primes p and q.
-      --dlog                       Discrete logarithm attack. When c and e are swapped in the RSA encryption formula. (e^c mod n)
-  -k, --key <KEY>                  Public or private key file(s). (RSA, X509, OPENSSH, PKCS#12, PKCS#7, CSR in PEM and DER formats.) Can be specified multiple times for multi-key attacks.
-      --password <PASSWORD>        Private key password/passphrase if encrypted.
-      --public                     Print the public key in PEM format.
-      --private                    Print the private key in PEM format.
-      --addpassword <ADDPASSWORD>  Add a password/passphrase to the private key.
-      --showinputs                 Print all the input parameters.
-      --dump                       Print the private RSA key variables n, e, p, q and d.
-      --dumpext                    Print the extended RSA key variables n, e, p, q, d, dP, dQ, pInv and qInv.
-      --factors                    Print all factors of n.
-      --bits                       Show bit length for all displayed values.
-      --json                       Print a machine-readable JSON report to stdout.
-  -t, --threads <THREADS>          Number of threads to use. Default: number of CPUs
-  -a, --attack <ATTACK>            Specify attacks to run. Default: all. (e.g. --attacks ecm,wiener,sparse)
-      --exclude <EXCLUDE>          Specify attacks to exclude. Default: none. (e.g. --exclude ecm,wiener,sparse)
-      --list                       List all available attacks.
-  -h, --help                       Print help
-  -V, --version                    Print version
+```text
+面向 CTF 的 RSA 破解工具，支持 RSA、X509、OPENSSH、PKCS#12、PKCS#7 和 CSR（PEM/DER）密钥。
+
+用法: rsacracker [选项]
+
+选项:
+  -r, --raw <RAW>                  从 raw 文件读取参数
+  -c, --cipher <CIPHER>            待解密的密文整数；可多次指定以进行多密钥攻击。
+  -f, --cipherfile <CIPHERFILE>    密文文件；可多次指定以进行多密钥攻击。
+  -o, --outfile <OUTFILE>          将解密结果写入文件；多个结果将使用 _1、_2 等后缀。
+  -n <N>                           RSA 模数；可多次指定以进行多密钥攻击。
+  -e <E>                           公钥指数，默认 65537；可多次指定以进行多密钥攻击。
+  -p <P>                           素数 p；支持通配符，例如 0xDEADBEEF????、10737418??、0x...C0FFEE。
+  -q <Q>                           素数 q；支持通配符，例如 0x????C0FFEE、??741827、0x...C0FFEE。
+  -d <D>                           私钥指数。
+      --phi <PHI>                  n 的欧拉函数 phi，即 (p-1)(q-1)。
+      --dp <DP>                     CRT 指数 dP（别名 dmp1）：d mod (p-1)。
+      --dq <DQ>                     CRT 指数 dQ（别名 dmq1）：d mod (q-1)。
+      --qinv <QINV>                 CRT 系数 qInv（别名 iqmp）：q^-1 mod p。
+      --pinv <PINV>                 CRT 系数 pInv（别名 ipmq）：p^-1 mod q。
+      --sum-pq <SUM_PQ>             两个素因子 p 与 q 的和。
+      --diff-pq <DIFF_PQ>           两个素因子 p 与 q 的差。
+      --dlog                        离散对数攻击：RSA 公式中的 c 与 e 互换时使用（e^c mod n）。
+  -k, --key <KEY>                  公钥或私钥文件，支持 RSA、X509、OPENSSH、PKCS#12、PKCS#7、CSR 的 PEM/DER 格式；可多次指定。
+      --password <PASSWORD>        加密私钥的密码或口令。
+      --public                      输出 PEM 格式的公钥。
+      --private                     输出 PEM 格式的私钥。
+      --addpassword <ADDPASSWORD>  为输出的私钥添加密码或口令。
+      --showinputs                  显示全部输入参数。
+      --dump                        输出 RSA 私钥变量 n、e、p、q 和 d。
+      --dumpext                     输出扩展 RSA 私钥变量 n、e、p、q、d、dP、dQ、pInv 和 qInv。
+      --factors                     输出 n 的全部素因子。
+      --bits                        在显示的数值后添加比特长度。
+      --json                        输出可供机器读取的 JSON 报告。
+  -t, --threads <THREADS>          使用的线程数，默认使用 CPU 核心数。
+  -a, --attack <ATTACK>            指定要运行的攻击，默认全部；可用逗号分隔多个攻击。
+      --exclude <EXCLUDE>          指定要排除的攻击，默认不排除；可用逗号分隔多个攻击。
+      --list                        列出全部可用攻击。
+  -h, --help                       显示帮助信息
+  -V, --version                    显示版本信息
 ```
 
 攻击名称请以 `--list` 输出为准。已知 `p/q` 时可使用 `--attack leaked_pq`；已知部分 CRT 指数时可使用 `leaked_crt_exponents`。不指定 `--attack` 会运行全部攻击，大规模模数可能耗时较长。
