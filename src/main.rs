@@ -236,7 +236,22 @@ fn error_report(error: &str) -> serde_json::Value {
     })
 }
 
+#[cfg(windows)]
+fn configure_console_encoding() {
+    #[allow(non_snake_case)]
+    unsafe extern "system" {
+        fn SetConsoleOutputCP(code_page: u32) -> i32;
+    }
+    // Keep Chinese help readable in CMD and PowerShell on non-UTF-8 locales.
+    unsafe {
+        SetConsoleOutputCP(65001);
+    }
+}
+
 fn main() -> ExitCode {
+    #[cfg(windows)]
+    configure_console_encoding();
+
     let json = std::env::args_os().any(|arg| arg == "--json");
     match run(json) {
         Ok(code) => ExitCode::from(code as u8),
