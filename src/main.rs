@@ -132,7 +132,7 @@ struct Args {
     #[clap(long)]
     bits: bool,
     /// 使用的线程数，默认使用 CPU 核心数。
-    #[clap(short, long, default_value_t = num_cpus::get())]
+    #[clap(short, long, default_value_t = num_cpus::get(), hide_default_value = true)]
     threads: usize,
     /// 指定要运行的攻击，默认全部；可用逗号分隔多个攻击。
     #[clap(

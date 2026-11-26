@@ -27,7 +27,13 @@ fn help_is_chinese_for_short_and_long_flags() {
                 "{flag} help is missing {expected:?}:\n{stdout}"
             );
         }
-        for english in ["Usage:", "Options:", "Print help", "Print version"] {
+        for english in [
+            "Usage:",
+            "Options:",
+            "Print help",
+            "Print version",
+            "[default:",
+        ] {
             assert!(
                 !stdout.contains(english),
                 "{flag} help still contains {english:?}:\n{stdout}"
