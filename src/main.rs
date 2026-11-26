@@ -272,6 +272,19 @@ fn run(json: bool) -> Result<i32, Box<dyn std::error::Error>> {
         Err(error) => {
             if json {
                 print_json(&error_report(&error.to_string()));
+            } else if error.kind() == clap::error::ErrorKind::DisplayHelp {
+                #[cfg(windows)]
+                let help = error.render();
+                #[cfg(windows)]
+                {
+                    let mut stdout = io::stdout().lock();
+                    stdout
+                        .write_all(&[0xef, 0xbb, 0xbf])
+                        .expect("failed to print UTF-8 help marker");
+                    write!(stdout, "{help}").expect("failed to print CLI help");
+                }
+                #[cfg(not(windows))]
+                error.print().expect("failed to print CLI help");
             } else {
                 error.print().expect("failed to print CLI error");
             }
