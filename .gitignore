@@ -30,5 +30,23 @@ target/
 /smoke-result.txt
 /packaged-result.json
 
-# Other
-.vscode
+# Local IDE and agent artifacts
+.qoder-credits/
+.idea/
+.vscode/
+
+# OS and editor temporary files
+.DS_Store
+Thumbs.db
+Desktop.ini
+*.swp
+*~
+*.tmp
+*.temp
+*.bak
+*.orig
+*.rej
+
+# Local coverage output
+/coverage/
+/htmlcov/
