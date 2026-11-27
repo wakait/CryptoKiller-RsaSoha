@@ -664,7 +664,7 @@ fn rational_derivative(polynomial: &[Rational]) -> Vec<Rational> {
 }
 
 fn rational_trim(polynomial: &mut Vec<Rational>) {
-    while polynomial.last() == Some(&Rational::ZERO) {
+    while polynomial.last() == Some(Rational::ZERO) {
         polynomial.pop();
     }
 }
