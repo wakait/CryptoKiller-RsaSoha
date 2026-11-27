@@ -20,6 +20,10 @@ impl Attack for PartialDAttack {
         AttackKind::KnownExtraInformation
     }
 
+    fn required_parameters(&self) -> &'static [&'static str] {
+        &["n", "e", "partial_d|d"]
+    }
+
     fn run(&self, params: &Parameters, _pb: Option<&ProgressBar>) -> Result<Solution, Error> {
         let e = &params.e;
         let e_u32 = match params.e.to_u32() {
@@ -27,39 +31,57 @@ impl Attack for PartialDAttack {
             None => return Err(Error::NotFound),
         };
         let n = params.n.as_ref().ok_or(Error::MissingParameters)?;
-        let d_lsb = params.d.as_ref().ok_or(Error::MissingParameters)?;
-
-        let known_bits = d_lsb.significant_bits();
+        let (d_lsb, known_bits) = if let Some(partial_d) = &params.partial_d {
+            (
+                partial_d,
+                params
+                    .partial_d_bits
+                    .unwrap_or_else(|| partial_d.significant_bits() as usize),
+            )
+        } else if let Some(d) = &params.d {
+            (d, d.significant_bits() as usize)
+        } else {
+            return Err(Error::MissingParameters);
+        };
+        if known_bits == 0 || known_bits >= n.significant_bits() as usize {
+            return Err(Error::NotFound);
+        }
+        let known_bits = known_bits as u32;
+        let known_mask = (Integer::from(1) << known_bits) - 1;
+        let d_lsb = Integer::from(d_lsb & known_mask);
 
         for k in 1..e_u32 {
             let d_candidate = (n.clone() * k + 1u64) / e;
             let d_msb = (d_candidate >> known_bits) << known_bits;
-            let d = d_msb | d_lsb;
+            let d = d_msb | &d_lsb;
 
-            // Check congruence
-            if Integer::from(e * &d) % k == 1 {
-                // Try to encrypt and decrypt 2 to check if d is correct
-                if Integer::from(2)
-                    .pow_mod(e, n)
-                    .unwrap()
+            // Verify the candidate as an RSA private exponent, not modulo the loop counter.
+            let valid = if let Some(c) = &params.c {
+                c.clone()
                     .pow_mod(&d, n)
-                    .unwrap()
-                    == 2
-                {
-                    // Compute p and q
-                    return KnownDAttack
-                        .run(
-                            &(Parameters {
-                                d: Some(d),
-                                ..Default::default()
-                            } + params),
-                            _pb,
-                        )
-                        .map(|mut s| {
-                            s.attack = self.name();
-                            s
-                        });
-                }
+                    .ok()
+                    .and_then(|m| m.pow_mod(e, n).ok())
+                    == Some(c.clone())
+            } else {
+                Integer::from(2)
+                    .pow_mod(e, n)
+                    .ok()
+                    .and_then(|m| m.pow_mod(&d, n).ok())
+                    == Some(Integer::from(2))
+            };
+            if valid {
+                return KnownDAttack
+                    .run(
+                        &(Parameters {
+                            d: Some(d),
+                            ..Default::default()
+                        } + params),
+                        _pb,
+                    )
+                    .map(|mut s| {
+                        s.attack = self.name();
+                        s
+                    });
             }
         }
 
@@ -76,6 +98,21 @@ mod tests {
     use crate::{Attack, Factors, Parameters};
 
     use super::*;
+
+    #[test]
+    fn explicit_partial_d_lsb_recovers_private_key() {
+        let params = Parameters {
+            n: Some(Integer::from(3233)),
+            e: Integer::from(17),
+            c: Some(Integer::from(2557)),
+            partial_d: Some(Integer::from(193)),
+            partial_d_bits: Some(8),
+            ..Default::default()
+        };
+
+        let solution = PartialDAttack.run(&params, None).unwrap();
+        assert_eq!(solution.m, Some(Integer::from(42)));
+    }
 
     #[test]
     fn attack() {

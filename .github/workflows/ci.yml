@@ -38,7 +38,7 @@ jobs:
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@stable
       - uses: swatinem/rust-cache@v2
-      - run: cargo test --all-features --locked --lib --bins --test cli --test keys --test multi_key -- --test-threads=2
+      - run: cargo test --all-features --locked
 
   docs:
     name: Documentation
@@ -50,4 +50,49 @@ jobs:
       - uses: swatinem/rust-cache@v2
       - env:
           RUSTDOCFLAGS: -Dwarnings
-        run: cargo doc --no-deps --locked
+        run: |
+          cargo test --doc --all-features --locked
+          cargo doc --no-deps --locked
+
+  windows-smoke:
+    name: Windows CLI smoke
+    runs-on: windows-latest
+    timeout-minutes: 60
+    env:
+      CARGO_HOME: D:/rsacracker-cargo
+      CARGO_TARGET_DIR: D:/rsacracker-target
+      MSYS2_PATH_TYPE: inherit
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install MSYS2 UCRT64 toolchain
+        uses: msys2/setup-msys2@v2
+        with:
+          msystem: UCRT64
+          update: true
+          install: base-devel pacman-mirrors diffutils m4 make pkgconf
+          pacboy: gcc:p rust:p openssl:p
+
+      - name: Configure OpenSSL paths
+        shell: msys2 {0}
+        run: |
+          test -f /ucrt64/include/openssl/ssl.h
+          test -f /ucrt64/lib/libssl.a
+          echo "OPENSSL_DIR=$(cygpath -m /ucrt64)" >> "$GITHUB_ENV"
+
+      - name: Build Windows CLI
+        shell: msys2 {0}
+        run: cargo build --locked --target x86_64-pc-windows-gnu
+
+      - name: Smoke test advanced CLI contract
+        shell: powershell
+        run: |
+          $bin = "$env:CARGO_TARGET_DIR\x86_64-pc-windows-gnu\debug\rsacracker.exe"
+          & $bin --list --json | Out-File -Encoding utf8 list.json
+          $list = Get-Content list.json -Raw | ConvertFrom-Json
+          $required = @("coppersmith_factor", "coppersmith_message", "partial_d_msb", "boneh_durfee", "franklin_reiter")
+          foreach ($name in $required) {
+            if ($list.attacks -notcontains $name) { throw "missing attack: $name" }
+          }
+          & $bin --help | Out-File -Encoding utf8 help.txt
+          if (-not (Select-String -Path help.txt -Pattern "--m-known" -Quiet)) { throw "missing advanced help" }

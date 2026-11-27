@@ -3,7 +3,7 @@ use rug::Integer;
 use crate::key::PrivateKey;
 
 /// Attack's result
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Solution {
     /// Attack's name
     pub attack: &'static str,

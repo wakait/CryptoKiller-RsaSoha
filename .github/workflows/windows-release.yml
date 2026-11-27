@@ -62,11 +62,24 @@ jobs:
 
       - name: Test
         shell: msys2 {0}
-        run: cargo test --all-features --locked --lib --bins --test cli --test keys --test multi_key -- --test-threads=2
+        run: cargo test --all-features --locked
 
       - name: Build release
         shell: msys2 {0}
         run: cargo build --release --locked --target x86_64-pc-windows-gnu
+
+      - name: Smoke test advanced CLI contract
+        shell: powershell
+        run: |
+          $bin = "$env:CARGO_TARGET_DIR\x86_64-pc-windows-gnu\release\rsacracker.exe"
+          & $bin --list --json | Out-File -Encoding utf8 list.json
+          $list = Get-Content list.json -Raw | ConvertFrom-Json
+          $required = @("coppersmith_factor", "coppersmith_message", "partial_d_msb", "boneh_durfee", "franklin_reiter")
+          foreach ($name in $required) {
+            if ($list.attacks -notcontains $name) { throw "missing attack: $name" }
+          }
+          & $bin --help | Out-File -Encoding utf8 help.txt
+          if (-not (Select-String -Path help.txt -Pattern "--m-known" -Quiet)) { throw "missing advanced help" }
 
       - name: Smoke test release binary
         shell: msys2 {0}

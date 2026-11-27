@@ -2,8 +2,10 @@ use indicatif::ProgressBar;
 use lazy_static::lazy_static;
 use std::sync::Arc;
 
+mod advanced;
 mod cipolla;
 mod comfact_cn;
+mod control;
 mod cube_root;
 mod factorization;
 mod gaa;
@@ -25,8 +27,13 @@ mod wiener;
 use crate::Factors;
 use crate::{Parameters, Solution};
 
+pub use advanced::{
+    BonehDurfeeAttack, CoppersmithFactorAttack, CoppersmithMessageAttack, FranklinReiterAttack,
+    PartialDMsbAttack,
+};
 pub use cipolla::CipollaAttack;
 pub use comfact_cn::ComfactCnAttack;
+pub use control::*;
 pub use cube_root::CubeRootAttack;
 pub use factorization::*;
 pub use gaa::GaaAttack;
@@ -55,6 +62,15 @@ pub enum Error {
     /// Unsuccessful attack
     #[error("Unsuccessful attack")]
     NotFound,
+    /// Attack cancelled cooperatively
+    #[error("Attack cancelled")]
+    Cancelled,
+    /// Shared candidate search budget exhausted
+    #[error("Candidate search budget exceeded")]
+    BudgetExceeded,
+    /// Attack unsupported for these parameters or resource limits
+    #[error("Attack is unsupported for these parameters or resource limits")]
+    Unsupported,
     /// Key error
     #[error(transparent)]
     Key(crate::key::KeyError),
@@ -155,16 +171,44 @@ pub trait Attack: std::fmt::Debug {
         AttackKind::Factorization
     }
 
+    /// Returns the input fields needed by this attack.
+    ///
+    /// A `|` separates alternatives and a `+` means all listed fields are needed.
+    fn required_parameters(&self) -> &'static [&'static str] {
+        &["n"]
+    }
+
+    /// Returns whether this attack can run when the modulus itself is prime.
+    fn supports_prime_modulus(&self) -> bool {
+        false
+    }
+
     /// Runs the attack
     fn run(&self, params: &Parameters, pb: Option<&ProgressBar>) -> Result<Solution, Error>;
+
+    /// Runs the attack with cooperative cancellation and a shared candidate budget.
+    ///
+    /// Existing attacks delegate to `run`; attacks with long loops should override this.
+    fn run_cancellable(
+        &self,
+        params: &Parameters,
+        pb: Option<&ProgressBar>,
+        _control: &AttackControl,
+    ) -> Result<Solution, Error> {
+        self.run(params, pb)
+    }
 }
 
 lazy_static! {
     static ref _ATTACKS: Vec<Arc<dyn Attack + Sync + Send>> = vec![
+        Arc::new(BonehDurfeeAttack),
         Arc::new(CipollaAttack),
+        Arc::new(CoppersmithFactorAttack),
+        Arc::new(CoppersmithMessageAttack),
         Arc::new(ComfactCnAttack),
         Arc::new(CubeRootAttack),
         Arc::new(DiffPQAttack),
+        Arc::new(FranklinReiterAttack),
         Arc::new(GaaAttack),
         Arc::new(KnownDAttack),
         Arc::new(KnownPhiAttack),
@@ -174,6 +218,7 @@ lazy_static! {
         Arc::new(LeakedPQAttack),
         Arc::new(NonCoprimeExpAttack),
         Arc::new(PartialDAttack),
+        Arc::new(PartialDMsbAttack),
         Arc::new(PartialPrimeAttack),
         Arc::new(PrimeModulusAttack),
         Arc::new(SmallEAttack),

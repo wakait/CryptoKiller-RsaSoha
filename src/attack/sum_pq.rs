@@ -19,6 +19,10 @@ impl Attack for SumPQAttack {
         AttackKind::KnownExtraInformation
     }
 
+    fn required_parameters(&self) -> &'static [&'static str] {
+        &["n", "e", "sum_pq"]
+    }
+
     fn speed(&self) -> AttackSpeed {
         AttackSpeed::Fast
     }
@@ -54,6 +58,10 @@ impl Attack for DiffPQAttack {
 
     fn kind(&self) -> AttackKind {
         AttackKind::KnownExtraInformation
+    }
+
+    fn required_parameters(&self) -> &'static [&'static str] {
+        &["n", "e", "diff_pq"]
     }
 
     fn speed(&self) -> AttackSpeed {

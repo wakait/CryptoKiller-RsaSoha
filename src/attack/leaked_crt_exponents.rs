@@ -20,6 +20,10 @@ impl Attack for LeakedCrtExponentsAttack {
         AttackKind::KnownExtraInformation
     }
 
+    fn required_parameters(&self) -> &'static [&'static str] {
+        &["e", "dp", "dq", "qinv|pinv"]
+    }
+
     fn run(&self, params: &Parameters, _pb: Option<&ProgressBar>) -> Result<Solution, Error> {
         let e = match params.e.to_u32() {
             Some(e) => e,

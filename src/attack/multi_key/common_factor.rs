@@ -32,6 +32,10 @@ impl Attack for CommonFactorAttack {
         AttackKind::MultiKey
     }
 
+    fn required_parameters(&self) -> &'static [&'static str] {
+        &["n (至少 2 个)"]
+    }
+
     fn run(&self, params: &Parameters, _pb: Option<&ProgressBar>) -> Result<Solution, Error> {
         // Need at least 2 keys (including the main one if n is present)
         let mut moduli = Vec::new();

@@ -1,6 +1,6 @@
 // Tests for multi-key parameter parsing
 
-use rsacracker::Parameters;
+use rsacracker::{Attack, CommonModulusAttack, HastadBroadcastAttack, Parameters};
 use rug::Integer;
 
 #[test]
@@ -19,14 +19,15 @@ c2 = 456
 
     let params = Parameters::from_raw(raw);
 
-    assert_eq!(params.keys.len(), 2);
+    // The first indexed key becomes the main key so single-key and multi-key attacks
+    // see the same parameters.
+    assert!(params.n.is_some());
+    assert_ne!(params.n, params.keys[0].n.clone());
+    assert_eq!(params.e, Integer::from(65537));
+    assert_eq!(params.c, Some(Integer::from(123)));
+    assert_eq!(params.keys.len(), 1);
 
-    let key1 = &params.keys[0];
-    assert!(key1.n.is_some());
-    assert_eq!(key1.e, Integer::from(65537));
-    assert_eq!(key1.c, Some(Integer::from(123)));
-
-    let key2 = &params.keys[1];
+    let key2 = &params.keys[0];
     assert!(key2.n.is_some());
     assert_eq!(key2.e, Integer::from(65537));
     assert_eq!(key2.c, Some(Integer::from(456)));
@@ -81,22 +82,43 @@ c20 = 300
 
     let params = Parameters::from_raw(raw);
 
-    // Should have 3 keys at indices 10, 15, and 20
-    assert_eq!(params.keys.len(), 3);
+    // The lowest indexed key becomes the main key; the remaining keys stay sorted.
+    assert_eq!(params.n, Some(Integer::from(111111111)));
+    assert_eq!(params.e, Integer::from(3));
+    assert_eq!(params.c, Some(Integer::from(100)));
+    assert_eq!(params.keys.len(), 2);
 
-    // Check that keys are stored at correct indices and sorted
-    let key0 = &params.keys[0];
-    assert_eq!(key0.n, Some(Integer::from(111111111)));
-    assert_eq!(key0.e, Integer::from(3));
-    assert_eq!(key0.c, Some(Integer::from(100)));
-
-    let key1 = &params.keys[1];
+    let key1 = &params.keys[0];
     assert_eq!(key1.n, Some(Integer::from(222222222)));
     assert_eq!(key1.e, Integer::from(5));
     assert_eq!(key1.c, Some(Integer::from(200)));
 
-    let key2 = &params.keys[2];
+    let key2 = &params.keys[1];
     assert_eq!(key2.n, Some(Integer::from(333333333)));
     assert_eq!(key2.e, Integer::from(7));
     assert_eq!(key2.c, Some(Integer::from(300)));
+}
+
+#[test]
+fn raw_common_modulus_input_runs_attack() {
+    let n = Integer::from(61) * 53;
+    let e1 = Integer::from(17);
+    let e2 = Integer::from(65539);
+    let m = Integer::from(42);
+    let c1 = m.clone().pow_mod(&e1, &n).unwrap();
+    let c2 = m.clone().pow_mod(&e2, &n).unwrap();
+    let raw = format!("n1 = {n}\ne1 = {e1}\nc1 = {c1}\nn2 = {n}\ne2 = {e2}\nc2 = {c2}\n");
+
+    let params = Parameters::from_raw(&raw);
+    let solution = CommonModulusAttack.run(&params, None).unwrap();
+    assert_eq!(solution.m, Some(m));
+}
+
+#[test]
+fn raw_hastad_input_runs_attack() {
+    let raw = "n1 = 11\ne1 = 3\nc1 = 8\nn2 = 13\ne2 = 3\nc2 = 8\nn3 = 17\ne3 = 3\nc3 = 8\n";
+
+    let params = Parameters::from_raw(raw);
+    let solution = HastadBroadcastAttack.run(&params, None).unwrap();
+    assert_eq!(solution.m, Some(Integer::from(2)));
 }

@@ -20,6 +20,10 @@ impl Attack for LeakedPQAttack {
         AttackKind::KnownExtraInformation
     }
 
+    fn required_parameters(&self) -> &'static [&'static str] {
+        &["p+q|n+p|n+q"]
+    }
+
     fn run(&self, params: &Parameters, _pb: Option<&ProgressBar>) -> Result<Solution, Error> {
         let e = &params.e;
         let p = params.p.as_ref();

@@ -20,6 +20,10 @@ impl Attack for CubeRootAttack {
         AttackKind::KnownExtraInformation
     }
 
+    fn required_parameters(&self) -> &'static [&'static str] {
+        &["e", "c"]
+    }
+
     fn run(&self, params: &Parameters, _pb: Option<&ProgressBar>) -> Result<Solution, Error> {
         let e = match params.e.to_u32() {
             Some(e) => e,

@@ -53,6 +53,10 @@ impl Attack for LeakedCrtCoefficientAttack {
         AttackKind::KnownExtraInformation
     }
 
+    fn required_parameters(&self) -> &'static [&'static str] {
+        &["e", "qinv", "pinv", "phi|d"]
+    }
+
     fn run(&self, params: &Parameters, _pb: Option<&ProgressBar>) -> Result<Solution, Error> {
         let e = &params.e;
         let qinv = params.qinv.as_ref().ok_or(Error::MissingParameters)?;

@@ -33,6 +33,10 @@ impl Attack for CommonModulusAttack {
         AttackKind::MultiKey
     }
 
+    fn required_parameters(&self) -> &'static [&'static str] {
+        &["n (相同)", "e1", "c1", "e2", "c2"]
+    }
+
     fn run(&self, params: &Parameters, _pb: Option<&ProgressBar>) -> Result<Solution, Error> {
         // Need the main n, e, c and at least one additional key with same n
         let n = params.n.as_ref().ok_or(Error::MissingParameters)?;

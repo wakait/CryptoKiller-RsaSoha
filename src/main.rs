@@ -14,8 +14,8 @@ use std::{
 };
 
 use rsacracker::{
-    integer_to_bytes, integer_to_string, Attack, IntegerArg, KeyEntry, Parameters, PartialPrimeArg,
-    ATTACKS,
+    integer_to_bytes, integer_to_string, Attack, AttackControl, IntegerArg, KeyEntry, Parameters,
+    PartialPrimeArg, ATTACKS,
 };
 use update_informer::{registry, Check};
 
@@ -56,6 +56,27 @@ struct Args {
     /// 待解密的密文整数；可多次指定以进行多密钥攻击。
     #[clap(short, long)]
     cipher: Vec<IntegerArg>,
+    /// 明文 m 的已知高位（十进制或带前缀整数）。
+    #[clap(long)]
+    m_known: Option<IntegerArg>,
+    /// 明文 m 的未知低位比特数，必须与 --m-known 同时提供。
+    #[clap(long)]
+    m_unknown_bits: Option<usize>,
+    /// 第二组密文，用于 related-message 攻击；不复用多密钥的 c2。
+    #[clap(long)]
+    related_c: Option<IntegerArg>,
+    /// 第一组仿射关系的斜率 a1：m1 = a1*x + b1。
+    #[clap(long)]
+    related_a1: Option<IntegerArg>,
+    /// 第一组仿射关系的截距 b1。
+    #[clap(long)]
+    related_b1: Option<IntegerArg>,
+    /// 第二组仿射关系的斜率 a2：m2 = a2*x + b2。
+    #[clap(long)]
+    related_a2: Option<IntegerArg>,
+    /// 第二组仿射关系的截距 b2。
+    #[clap(long)]
+    related_b2: Option<IntegerArg>,
     /// 密文文件；可多次指定以进行多密钥攻击。
     #[clap(short = 'f', long)]
     cipherfile: Vec<std::path::PathBuf>,
@@ -77,6 +98,18 @@ struct Args {
     /// 私钥指数。
     #[clap(short)]
     d: Option<IntegerArg>,
+    /// 私钥指数 d 的已知低位（LSB），用于 partial_d 攻击。
+    #[clap(long)]
+    partial_d: Option<IntegerArg>,
+    /// partial_d 的有效比特数；省略时按 partial_d 的实际比特数计算。
+    #[clap(long)]
+    partial_d_bits: Option<usize>,
+    /// 私钥指数 d 的已知高位（MSB），用于 partial_d_msb 攻击。
+    #[clap(long)]
+    d_known_msb: Option<IntegerArg>,
+    /// d 的未知低位比特数，必须与 --d-known-msb 同时提供。
+    #[clap(long)]
+    d_unknown_bits: Option<usize>,
     /// n 的欧拉函数 phi，即 (p-1)(q-1)。
     #[clap(long)]
     phi: Option<IntegerArg>,
@@ -134,6 +167,9 @@ struct Args {
     /// 使用的线程数，默认使用 CPU 核心数。
     #[clap(short, long, default_value_t = num_cpus::get(), hide_default_value = true)]
     threads: usize,
+    /// 本次调用共享的纯枚举候选预算；默认 2^28，0 表示禁用纯枚举。
+    #[clap(long)]
+    search_budget: Option<u64>,
     /// 指定要运行的攻击，默认全部；可用逗号分隔多个攻击。
     #[clap(
         short,
@@ -318,16 +354,34 @@ fn run(json: bool) -> Result<i32, Box<dyn std::error::Error>> {
 
     // List attacks
     if args.list {
+        let attack_details: Vec<serde_json::Value> = ATTACKS
+            .iter()
+            .map(|attack| {
+                serde_json::json!({
+                    "name": attack.name(),
+                    "kind": format!("{:?}", attack.kind()),
+                    "speed": format!("{:?}", attack.speed()).to_lowercase(),
+                    "required_parameters": attack.required_parameters(),
+                })
+            })
+            .collect();
+
         if json {
             print_json(&serde_json::json!({
                 "version": current_version,
                 "success": true,
                 "attacks": ATTACKS.iter().map(|attack| attack.name()).collect::<Vec<_>>(),
+                "attack_details": attack_details,
             }));
         } else {
-            println!("Available attacks:");
+            println!("可用攻击（名称 | 类型 | 所需参数）:");
             for attack in ATTACKS.iter() {
-                println!("  {}", attack.name());
+                println!(
+                    "  {:<24} {:<20} 所需参数: {}",
+                    attack.name(),
+                    format!("{:?}", attack.kind()),
+                    attack.required_parameters().join(", ")
+                );
             }
         }
         return Ok(0);
@@ -369,6 +423,10 @@ fn run(json: bool) -> Result<i32, Box<dyn std::error::Error>> {
         || args.p.is_some()
         || args.q.is_some()
         || args.d.is_some()
+        || args.partial_d.is_some()
+        || args.partial_d_bits.is_some()
+        || args.d_known_msb.is_some()
+        || args.d_unknown_bits.is_some()
         || args.phi.is_some()
         || args.dp.is_some()
         || args.dq.is_some()
@@ -376,6 +434,14 @@ fn run(json: bool) -> Result<i32, Box<dyn std::error::Error>> {
         || args.pinv.is_some()
         || args.sum_pq.is_some()
         || args.diff_pq.is_some()
+        || args.m_known.is_some()
+        || args.m_unknown_bits.is_some()
+        || args.related_c.is_some()
+        || args.related_a1.is_some()
+        || args.related_b1.is_some()
+        || args.related_a2.is_some()
+        || args.related_b2.is_some()
+        || args.search_budget.is_some()
         || !args.key.is_empty();
     let raw = if let Some(path) = args.raw.as_ref() {
         Some(std::fs::read_to_string(path)?)
@@ -396,15 +462,29 @@ fn run(json: bool) -> Result<i32, Box<dyn std::error::Error>> {
     // Build parameters
     params += Parameters {
         c,
+        m_known: None,
+        m_unknown_bits: None,
+        related_c: None,
+        related_a1: None,
+        related_b1: None,
+        related_a2: None,
+        related_b2: None,
         n: args.n.first().map(|n| n.0.clone()),
         e: args
             .e
             .first()
             .map(|e| e.0.clone())
             .unwrap_or_else(|| Integer::from(65537)),
+        search_budget: args
+            .search_budget
+            .unwrap_or(rsacracker::DEFAULT_SEARCH_BUDGET),
         p: args.p.as_ref().and_then(|p| p.0.full().cloned()),
         q: args.q.as_ref().and_then(|q| q.0.full().cloned()),
         d: args.d.map(|n| n.0),
+        partial_d: args.partial_d.map(|n| n.0),
+        partial_d_bits: args.partial_d_bits,
+        d_known_msb: args.d_known_msb.as_ref().map(|value| value.0.clone()),
+        d_unknown_bits: args.d_unknown_bits,
         phi: args.phi.map(|n| n.0),
         dp: args.dp.map(|n| n.0),
         dq: args.dq.map(|n| n.0),
@@ -428,6 +508,37 @@ fn run(json: bool) -> Result<i32, Box<dyn std::error::Error>> {
         }),
         keys: Vec::new(),
     };
+    // Explicit CLI values override raw values, including zero unknown bits.
+    if let Some(m_known) = args.m_known {
+        params.m_known = Some(m_known.0);
+    }
+    if let Some(m_unknown_bits) = args.m_unknown_bits {
+        params.m_unknown_bits = Some(m_unknown_bits);
+    }
+    if let Some(related_c) = args.related_c {
+        params.related_c = Some(related_c.0);
+    }
+    if let Some(related_a1) = args.related_a1 {
+        params.related_a1 = Some(related_a1.0);
+    }
+    if let Some(related_b1) = args.related_b1 {
+        params.related_b1 = Some(related_b1.0);
+    }
+    if let Some(related_a2) = args.related_a2 {
+        params.related_a2 = Some(related_a2.0);
+    }
+    if let Some(related_b2) = args.related_b2 {
+        params.related_b2 = Some(related_b2.0);
+    }
+    if let Some(d_known_msb) = args.d_known_msb {
+        params.d_known_msb = Some(d_known_msb.0);
+    }
+    if let Some(d_unknown_bits) = args.d_unknown_bits {
+        params.d_unknown_bits = Some(d_unknown_bits);
+    }
+    if let Some(search_budget) = args.search_budget {
+        params.search_budget = search_budget;
+    }
 
     // Add additional keys from multiple N, E, and C parameters
     // This supports various multi-key attack scenarios:
@@ -486,6 +597,10 @@ fn run(json: bool) -> Result<i32, Box<dyn std::error::Error>> {
             }
         }
     };
+
+    params
+        .validate_advanced_inputs()
+        .map_err(|error| format!("Invalid advanced input: {error}"))?;
 
     if params.n.is_none() && params.keys.iter().all(|key| key.n.is_none()) {
         return Err("No input provided. Use --raw/--input, pipe raw text, provide key parameters, or create data.txt in the current directory.".into());
@@ -561,7 +676,12 @@ fn run(json: bool) -> Result<i32, Box<dyn std::error::Error>> {
 
     // Run attacks
     let start = std::time::Instant::now();
-    let res = rsacracker::run_specific_attacks_with_threads(&params, &attacks, args.threads);
+    let res = rsacracker::run_specific_attacks_with_control(
+        &params,
+        &attacks,
+        args.threads,
+        AttackControl::new(params.search_budget),
+    );
     let elapsed = start.elapsed();
 
     let solution = match res {
@@ -592,7 +712,8 @@ fn run(json: bool) -> Result<i32, Box<dyn std::error::Error>> {
                 print_json(&report);
                 return Ok(1);
             } else {
-                return Err(error.into());
+                eprintln!("{error}");
+                return Ok(1);
             }
         }
     };

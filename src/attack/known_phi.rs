@@ -87,6 +87,10 @@ impl Attack for KnownPhiAttack {
         AttackKind::KnownExtraInformation
     }
 
+    fn required_parameters(&self) -> &'static [&'static str] {
+        &["n", "e", "phi"]
+    }
+
     fn run(&self, params: &Parameters, _pb: Option<&ProgressBar>) -> Result<Solution, Error> {
         let e = params.e.clone();
         let n = params.n.as_ref().ok_or(Error::MissingParameters)?;

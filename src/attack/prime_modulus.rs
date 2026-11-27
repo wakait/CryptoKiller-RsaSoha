@@ -20,6 +20,14 @@ impl Attack for PrimeModulusAttack {
         AttackKind::KnownExtraInformation
     }
 
+    fn required_parameters(&self) -> &'static [&'static str] {
+        &["n", "e", "c"]
+    }
+
+    fn supports_prime_modulus(&self) -> bool {
+        true
+    }
+
     fn run(&self, params: &Parameters, _pb: Option<&ProgressBar>) -> Result<Solution, Error> {
         if let (Some(n), Some(c)) = (&params.n, &params.c) {
             if n.is_probably_prime(100) == IsPrime::No {

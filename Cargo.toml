@@ -55,5 +55,5 @@ serde_json = "1.0"
 [dependencies.rug]
 version = "1.30"
 default-features = false
-features = ["integer", "rand", "std"]
+features = ["integer", "rand", "rational", "std"]
 

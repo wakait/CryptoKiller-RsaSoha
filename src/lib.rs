@@ -29,7 +29,6 @@ fn check_n_prime(n: &Option<Integer>) -> bool {
     if let Some(n) = &n {
         match n.is_probably_prime(100) {
             IsPrime::Yes => {
-                eprintln!("Error: N is prime, no attacks possible");
                 return true;
             }
             IsPrime::Probably => {
@@ -72,6 +71,7 @@ async fn _run_attacks(
     attacks: &[Arc<dyn Attack + Sync + Send>],
     sender: mpsc::Sender<Result<Solution, Error>>,
     mp: Arc<MultiProgress>,
+    control: AttackControl,
 ) {
     // Create all progress bars
     let pbs = RefCell::new(Vec::with_capacity(attacks.len()));
@@ -85,24 +85,29 @@ async fn _run_attacks(
         let sender = sender.clone();
         let mp = Arc::clone(&mp);
         let pbs = RefCell::clone(&pbs);
+        let control = control.clone();
 
         // Spawn attack as a task
         tokio::task::spawn(async move {
             // This unhide the progress bar
             pb.set_prefix(attack.name());
 
-            let solution = attack.run(&params, Some(&pb)).map(|mut solution| {
-                // Try to decrypt the cipher if no message was found
-                if let (Some(pk), None, Some(c)) = (&solution.pk, &solution.m, &params.c) {
-                    solution.m = Some(pk.decrypt(c))
-                }
-                solution
-            });
+            let solution =
+                attack
+                    .run_cancellable(&params, Some(&pb), &control)
+                    .map(|mut solution| {
+                        // Try to decrypt the cipher if no message was found
+                        if let (Some(pk), None, Some(c)) = (&solution.pk, &solution.m, &params.c) {
+                            solution.m = Some(pk.decrypt(c))
+                        }
+                        solution
+                    });
 
             // Remove progress bar from list
             mp.remove(&pb);
-            // If attack was successful, clear all progress bars
+            // If attack was successful, cancel its siblings and clear all progress bars
             if solution.is_ok() {
+                control.cancel();
                 for pb in pbs.borrow().iter() {
                     pb.finish_and_clear();
                 }
@@ -142,7 +147,20 @@ pub fn run_specific_attacks_with_threads(
     attacks: &[Arc<dyn Attack + Sync + Send>],
     threads: usize,
 ) -> Result<Solution, Option<Factors>> {
-    if check_n_prime(&params.n) {
+    run_specific_attacks_with_control(params, attacks, threads, AttackControl::default())
+}
+
+/// Run specific attacks with an explicit shared cancellation and candidate-budget control.
+pub fn run_specific_attacks_with_control(
+    params: &Parameters,
+    attacks: &[Arc<dyn Attack + Sync + Send>],
+    threads: usize,
+    control: AttackControl,
+) -> Result<Solution, Option<Factors>> {
+    if check_n_prime(&params.n)
+        && !(params.c.is_some() && attacks.iter().any(|attack| attack.supports_prime_modulus()))
+    {
+        eprintln!("Error: N is prime, no selected attack can use it");
         return Err(None);
     }
 
@@ -165,7 +183,7 @@ pub fn run_specific_attacks_with_threads(
 
     // Spawn attacks in background
     let attacks = attacks.to_vec();
-    r.spawn(async move { _run_attacks(params, &attacks, sender, mp).await });
+    r.spawn(async move { _run_attacks(params, &attacks, sender, mp, control).await });
 
     // Retrieve result
     let mut partial_factors: Option<Factors> = None;
@@ -219,6 +237,120 @@ mod tests {
     use rug::ops::Pow;
 
     use super::*;
+    use std::sync::atomic::{AtomicBool, Ordering};
+
+    #[derive(Debug)]
+    struct CancellationObserver {
+        started: Arc<AtomicBool>,
+        observed: Arc<AtomicBool>,
+    }
+
+    impl Attack for CancellationObserver {
+        fn name(&self) -> &'static str {
+            "cancellation_observer"
+        }
+
+        fn run(&self, _params: &Parameters, _pb: Option<&ProgressBar>) -> Result<Solution, Error> {
+            Err(Error::NotFound)
+        }
+
+        fn run_cancellable(
+            &self,
+            _params: &Parameters,
+            _pb: Option<&ProgressBar>,
+            control: &AttackControl,
+        ) -> Result<Solution, Error> {
+            self.started.store(true, Ordering::SeqCst);
+            while !control.is_cancelled() {
+                std::thread::yield_now();
+            }
+            self.observed.store(true, Ordering::SeqCst);
+            Err(Error::Cancelled)
+        }
+    }
+
+    #[derive(Debug)]
+    struct WaitForObserver {
+        started: Arc<AtomicBool>,
+    }
+
+    impl Attack for WaitForObserver {
+        fn name(&self) -> &'static str {
+            "wait_for_observer"
+        }
+
+        fn run(&self, _params: &Parameters, _pb: Option<&ProgressBar>) -> Result<Solution, Error> {
+            Err(Error::NotFound)
+        }
+
+        fn run_cancellable(
+            &self,
+            _params: &Parameters,
+            _pb: Option<&ProgressBar>,
+            _control: &AttackControl,
+        ) -> Result<Solution, Error> {
+            for _ in 0..10_000 {
+                if self.started.load(Ordering::SeqCst) {
+                    return Ok(Solution::new_m(self.name(), Integer::from(1)));
+                }
+                std::thread::sleep(std::time::Duration::from_millis(1));
+            }
+            Err(Error::NotFound)
+        }
+    }
+
+    #[test]
+    fn successful_attack_cancels_shared_control() {
+        let started = Arc::new(AtomicBool::new(false));
+        let observed = Arc::new(AtomicBool::new(false));
+        let attacks: Vec<Arc<dyn Attack + Sync + Send>> = vec![
+            Arc::new(CancellationObserver {
+                started: started.clone(),
+                observed: observed.clone(),
+            }),
+            Arc::new(WaitForObserver {
+                started: started.clone(),
+            }),
+        ];
+        let params = Parameters {
+            n: Some(Integer::from(3233)),
+            ..Default::default()
+        };
+
+        let solution =
+            run_specific_attacks_with_control(&params, &attacks, 2, AttackControl::default())
+                .unwrap();
+        assert_eq!(solution.attack, "wait_for_observer");
+
+        for _ in 0..1_000 {
+            if observed.load(Ordering::SeqCst) {
+                break;
+            }
+            std::thread::sleep(std::time::Duration::from_millis(1));
+        }
+        assert!(observed.load(Ordering::SeqCst));
+    }
+
+    #[test]
+    fn explicit_control_budget_reaches_partial_prime() {
+        let params = Parameters {
+            n: Some(Integer::from(3233)),
+            partial_p: Some(PartialPrime::Partial {
+                radix: 16,
+                k: Some(2),
+                orient: Orientation::MsbKnown,
+                known: Integer::from(0x3d),
+            }),
+            ..Default::default()
+        };
+        assert!(run_specific_attacks_with_control(
+            &params,
+            &[Arc::new(PartialPrimeAttack)],
+            1,
+            AttackControl::new(0),
+        )
+        .is_err());
+    }
 
     #[test]
     fn small_n_prime() {
@@ -228,6 +360,34 @@ mod tests {
         };
 
         assert!(run_attacks(&params).is_err());
+    }
+
+    #[test]
+    fn prime_modulus_attack_is_not_blocked_by_prime_guard() {
+        let params = Parameters {
+            n: Some(Integer::from(17)),
+            e: Integer::from(5),
+            c: Some(Integer::from(5)),
+            ..Default::default()
+        };
+
+        let solution =
+            run_specific_attacks_with_threads(&params, &[Arc::new(PrimeModulusAttack)], 1).unwrap();
+        assert_eq!(solution.m, Some(Integer::from(3)));
+    }
+
+    #[test]
+    fn cipolla_attack_is_not_blocked_by_prime_guard() {
+        let params = Parameters {
+            n: Some(Integer::from(23)),
+            e: Integer::from(2),
+            c: Some(Integer::from(4)),
+            ..Default::default()
+        };
+
+        let solution =
+            run_specific_attacks_with_threads(&params, &[Arc::new(CipollaAttack)], 1).unwrap();
+        assert!(solution.ms.contains(&Integer::from(2)));
     }
 
     #[test]

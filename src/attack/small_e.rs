@@ -23,6 +23,10 @@ impl Attack for SmallEAttack {
         AttackKind::KnownExtraInformation
     }
 
+    fn required_parameters(&self) -> &'static [&'static str] {
+        &["n", "e", "c"]
+    }
+
     fn run(&self, params: &Parameters, pb: Option<&ProgressBar>) -> Result<Solution, Error> {
         let e = match params.e.to_u32() {
             Some(e) => e,

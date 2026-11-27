@@ -6,7 +6,7 @@ use crate::{
     Parameters, Solution,
 };
 
-/// Known phi attack
+/// Known private exponent attack
 ///
 /// See <https://github.com/jvdsn/crypto-attacks/blob/master/attacks/rsa/known_d.py>
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -25,10 +25,24 @@ impl Attack for KnownDAttack {
         AttackKind::KnownExtraInformation
     }
 
+    fn required_parameters(&self) -> &'static [&'static str] {
+        &["n", "e", "d"]
+    }
+
     fn run(&self, params: &Parameters, _pb: Option<&ProgressBar>) -> Result<Solution, Error> {
         let e = &params.e;
         let n = params.n.as_ref().ok_or(Error::MissingParameters)?;
         let d = params.d.as_ref().ok_or(Error::MissingParameters)?;
+
+        let decrypted = if let Some(c) = &params.c {
+            let m = c.clone().pow_mod(d, n).map_err(|_| Error::NotFound)?;
+            if m.clone().pow_mod(e, n).map_err(|_| Error::NotFound)? != *c {
+                return Err(Error::NotFound);
+            }
+            Some(m)
+        } else {
+            None
+        };
 
         let k = e * d - Integer::from(1);
         let bits = log_base_ceil(&k, 2);
@@ -41,10 +55,10 @@ impl Attack for KnownDAttack {
                 let p = Integer::from(n.gcd_ref(&(x - Integer::from(1))));
                 if p > 1 && p < *n && n.is_divisible(&p) {
                     let q = Integer::from(n / &p);
-                    return Ok(Solution::new_pk(
-                        self.name(),
-                        PrivateKey::from_p_q(p, q, e)?,
-                    ));
+                    let pk = PrivateKey::from_p_q(p, q, e)?;
+                    let mut solution = Solution::new_pk(self.name(), pk);
+                    solution.m = decrypted.clone();
+                    return Ok(solution);
                 }
             }
         }
@@ -58,6 +72,40 @@ mod tests {
     use crate::{Attack, Factors, Parameters};
 
     use super::*;
+
+    #[test]
+    fn decrypts_and_recovers_private_key_when_cipher_is_known() {
+        let params = Parameters {
+            n: Some(Integer::from(3233)),
+            e: Integer::from(17),
+            d: Some(Integer::from(2753)),
+            c: Some(Integer::from(2557)),
+            ..Default::default()
+        };
+
+        let solution = KnownDAttack.run(&params, None).unwrap();
+        assert_eq!(solution.m, Some(Integer::from(42)));
+        let pk = solution.pk.unwrap();
+        assert_eq!(pk.factors.product(), Integer::from(3233));
+        assert_eq!(pk.p(), Integer::from(53));
+        assert_eq!(pk.q(), Integer::from(61));
+    }
+
+    #[test]
+    fn rejects_private_exponent_incompatible_with_public_exponent() {
+        let params = Parameters {
+            n: Some(Integer::from(3233)),
+            e: Integer::from(18),
+            d: Some(Integer::from(2753)),
+            c: Some(Integer::from(2558)),
+            ..Default::default()
+        };
+
+        assert!(matches!(
+            KnownDAttack.run(&params, None),
+            Err(Error::NotFound)
+        ));
+    }
 
     #[test]
     fn attack_1() {

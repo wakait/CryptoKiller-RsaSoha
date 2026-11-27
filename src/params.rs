@@ -1,5 +1,7 @@
 use base64::{engine::general_purpose, Engine};
 use rug::Integer;
+
+use crate::DEFAULT_SEARCH_BUDGET;
 use std::{
     fmt::Display,
     ops::{Add, AddAssign},
@@ -259,21 +261,50 @@ pub struct KeyEntry {
     pub e: Integer,
 }
 
+enum RawValue {
+    Integer(Integer),
+    PartialPrime(PartialPrime),
+}
+
 /// Known parameters
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Parameters {
     /// Cipher message.
     pub c: Option<Integer>,
+    /// Known most-significant bits of the plaintext.
+    pub m_known: Option<Integer>,
+    /// Number of unknown least-significant bits in `m_known`.
+    pub m_unknown_bits: Option<usize>,
+    /// Second ciphertext for the related-message attack.
+    pub related_c: Option<Integer>,
+    /// Slope of the first affine relation m1 = a1*x + b1.
+    pub related_a1: Option<Integer>,
+    /// Intercept of the first affine relation.
+    pub related_b1: Option<Integer>,
+    /// Slope of the second affine relation m2 = a2*x + b2.
+    pub related_a2: Option<Integer>,
+    /// Intercept of the second affine relation.
+    pub related_b2: Option<Integer>,
     /// Modulus.
     pub n: Option<Integer>,
     /// Public exponent.
     pub e: Integer,
+    /// Shared pure-enumeration candidate budget; zero disables enumeration.
+    pub search_budget: u64,
     /// Prime number p.
     pub p: Option<Integer>,
     /// Prime number q.
     pub q: Option<Integer>,
     /// Private exponent.
     pub d: Option<Integer>,
+    /// Known least-significant bits of the private exponent.
+    pub partial_d: Option<Integer>,
+    /// Number of known least-significant bits in `partial_d`.
+    pub partial_d_bits: Option<usize>,
+    /// Known most-significant bits of the private exponent.
+    pub d_known_msb: Option<Integer>,
+    /// Number of unknown least-significant bits in `d_known_msb`.
+    pub d_unknown_bits: Option<usize>,
     /// Phi or Euler's totient function of n. (p-1)(q-1)
     pub phi: Option<Integer>,
     /// dP or dmp1 CRT exponent. (d mod p-1)
@@ -301,10 +332,22 @@ impl Default for Parameters {
         Self {
             n: None,
             e: 65537.into(),
+            search_budget: DEFAULT_SEARCH_BUDGET,
             c: None,
+            m_known: None,
+            m_unknown_bits: None,
+            related_c: None,
+            related_a1: None,
+            related_b1: None,
+            related_a2: None,
+            related_b2: None,
             p: None,
             q: None,
             d: None,
+            partial_d: None,
+            partial_d_bits: None,
+            d_known_msb: None,
+            d_unknown_bits: None,
             phi: None,
             dp: None,
             dq: None,
@@ -327,8 +370,26 @@ impl Display for Parameters {
             s += &format!("n = {n}\n");
         }
         s += &format!("e = {}\n", self.e);
+        s += &format!("search_budget = {}\n", self.search_budget);
         if let Some(c) = &self.c {
             s += &format!("c = {c}\n");
+        }
+        if let Some(m_known) = &self.m_known {
+            s += &format!("m_known = {m_known}\n");
+        }
+        if let Some(m_unknown_bits) = self.m_unknown_bits {
+            s += &format!("m_unknown_bits = {m_unknown_bits}\n");
+        }
+        for (name, value) in [
+            ("related_c", &self.related_c),
+            ("related_a1", &self.related_a1),
+            ("related_b1", &self.related_b1),
+            ("related_a2", &self.related_a2),
+            ("related_b2", &self.related_b2),
+        ] {
+            if let Some(value) = value {
+                s += &format!("{name} = {value}\n");
+            }
         }
         if let Some(p) = &self.p {
             s += &format!("p = {p}\n");
@@ -338,6 +399,18 @@ impl Display for Parameters {
         }
         if let Some(d) = &self.d {
             s += &format!("d = {d}\n");
+        }
+        if let Some(partial_d) = &self.partial_d {
+            s += &format!("partial_d = {partial_d}\n");
+        }
+        if let Some(partial_d_bits) = self.partial_d_bits {
+            s += &format!("partial_d_bits = {partial_d_bits}\n");
+        }
+        if let Some(d_known_msb) = &self.d_known_msb {
+            s += &format!("d_known_msb = {d_known_msb}\n");
+        }
+        if let Some(d_unknown_bits) = self.d_unknown_bits {
+            s += &format!("d_unknown_bits = {d_unknown_bits}\n");
         }
         if let Some(phi) = &self.phi {
             s += &format!("phi = {phi}\n");
@@ -391,6 +464,59 @@ impl Display for Parameters {
 }
 
 impl Parameters {
+    /// Validate paired advanced-MSB fields and their modulus bounds.
+    pub fn validate_advanced_inputs(&self) -> Result<(), String> {
+        let related_fields = [
+            self.related_c.is_some(),
+            self.related_a1.is_some(),
+            self.related_b1.is_some(),
+            self.related_a2.is_some(),
+            self.related_b2.is_some(),
+        ];
+        if related_fields.iter().any(|present| *present)
+            && related_fields.iter().any(|present| !present)
+        {
+            return Err(
+                "related_c, related_a1, related_b1, related_a2 and related_b2 must be provided together"
+                    .to_string(),
+            );
+        }
+        match (&self.m_known, self.m_unknown_bits) {
+            (None, None) => {}
+            (Some(_), None) | (None, Some(_)) => {
+                return Err("m_known and m_unknown_bits must be provided together".to_string());
+            }
+            (Some(_), Some(unknown_bits)) => {
+                if self
+                    .n
+                    .as_ref()
+                    .is_some_and(|n| unknown_bits > n.significant_bits() as usize)
+                {
+                    return Err(
+                        "m_unknown_bits must not exceed the significant bits of n".to_string()
+                    );
+                }
+            }
+        }
+        match (&self.d_known_msb, self.d_unknown_bits) {
+            (None, None) => Ok(()),
+            (Some(_), None) | (None, Some(_)) => {
+                Err("d_known_msb and d_unknown_bits must be provided together".to_string())
+            }
+            (Some(_), Some(unknown_bits)) => {
+                if self
+                    .n
+                    .as_ref()
+                    .is_some_and(|n| unknown_bits > n.significant_bits() as usize)
+                {
+                    Err("d_unknown_bits must not exceed the significant bits of n".to_string())
+                } else {
+                    Ok(())
+                }
+            }
+        }
+    }
+
     /// Create parameters from raw file
     ///
     /// # Example
@@ -429,11 +555,39 @@ impl Parameters {
         }
     }
 
+    fn set_prime(full: &mut Option<Integer>, partial: &mut Option<PartialPrime>, value: RawValue) {
+        let RawValue::PartialPrime(value) = value else {
+            return;
+        };
+        match value {
+            PartialPrime::Full(value) => {
+                *full = Some(value);
+                *partial = None;
+            }
+            value => {
+                *full = None;
+                *partial = Some(value);
+            }
+        }
+    }
+
+    fn derive_known_values(&mut self) {
+        if let (Some(p), Some(q)) = (&self.p, &self.q) {
+            if self.n.is_none() {
+                self.n = Some((p * q).into());
+            }
+            if self.phi.is_none() {
+                self.phi = Some(((p - Integer::from(1)) * (q - Integer::from(1))).into());
+            }
+        }
+    }
+
     fn parse_raw(raw: &str) -> (Self, Vec<String>) {
         let mut params = Self::default();
         let mut errors = Vec::new();
         let mut key_entries: std::collections::HashMap<usize, KeyEntry> =
             std::collections::HashMap::new();
+        let mut has_main_key = false;
 
         for (line_index, line) in raw.lines().enumerate() {
             let line = line.trim();
@@ -453,15 +607,23 @@ impl Parameters {
 
             // Clean up key and check for index suffix (e.g., n1, e2, c10)
             let key_cleaned = key.replace(['_', '-'], "");
-            // Parse full numeric suffix at the end of the key
+            // Affine-relation names end in digits that are part of the field, not key indices.
+            let key_lower = key_cleaned.to_lowercase();
+            let is_related_field = matches!(
+                key_lower.as_str(),
+                "relatedc" | "relateda1" | "relatedb1" | "relateda2" | "relatedb2"
+            );
+            // Parse full numeric suffix at the end of ordinary key names (e.g., n1, e2, c10).
             let mut chars = key_cleaned.chars().rev().peekable();
             let mut digit_str = String::new();
-            while let Some(&c) = chars.peek() {
-                if c.is_ascii_digit() {
-                    digit_str.push(c);
-                    chars.next();
-                } else {
-                    break;
+            if !is_related_field {
+                while let Some(&c) = chars.peek() {
+                    if c.is_ascii_digit() {
+                        digit_str.push(c);
+                        chars.next();
+                    } else {
+                        break;
+                    }
                 }
             }
 
@@ -485,10 +647,22 @@ impl Parameters {
                 matches!(
                     base_key.as_str(),
                     "n" | "e"
+                        | "searchbudget"
                         | "c"
+                        | "mknown"
+                        | "munknownbits"
+                        | "relatedc"
+                        | "relateda1"
+                        | "relatedb1"
+                        | "relateda2"
+                        | "relatedb2"
                         | "p"
                         | "q"
                         | "d"
+                        | "partiald"
+                        | "partialdbits"
+                        | "dknownmsb"
+                        | "dunknownbits"
                         | "phi"
                         | "dp"
                         | "dmp1"
@@ -500,20 +674,38 @@ impl Parameters {
                         | "ipmq"
                         | "sumpq"
                         | "diffpq"
+                        | "partialp"
+                        | "partialq"
                 )
             };
             if !recognized {
+                errors.push(format!("line {}: unknown field `{key}`", line_index + 1));
                 continue;
             }
 
-            let value = match IntegerArg::from_str(value) {
-                Ok(value) => value.0,
-                Err(error) => {
-                    errors.push(format!(
-                        "line {}: invalid value for `{key}`: `{value}` ({error})",
-                        line_index + 1
-                    ));
-                    continue;
+            let value = if index.is_none()
+                && matches!(base_key.as_str(), "p" | "q" | "partialp" | "partialq")
+            {
+                match PartialPrimeArg::from_str(value) {
+                    Ok(value) => RawValue::PartialPrime(value.0),
+                    Err(error) => {
+                        errors.push(format!(
+                            "line {}: invalid value for `{key}`: `{value}` ({error})",
+                            line_index + 1
+                        ));
+                        continue;
+                    }
+                }
+            } else {
+                match IntegerArg::from_str(value) {
+                    Ok(value) => RawValue::Integer(value.0),
+                    Err(error) => {
+                        errors.push(format!(
+                            "line {}: invalid value for `{key}`: `{value}` ({error})",
+                            line_index + 1
+                        ));
+                        continue;
+                    }
                 }
             };
 
@@ -525,6 +717,9 @@ impl Parameters {
                     c: None,
                 });
 
+                let RawValue::Integer(value) = value else {
+                    continue;
+                };
                 match base_key.as_str() {
                     "n" => entry.n = Some(value),
                     "e" => entry.e = value,
@@ -533,20 +728,78 @@ impl Parameters {
                 }
             } else {
                 // This is a regular parameter (n, e, c, etc.)
-                match base_key.as_str() {
-                    "n" => params.n = Some(value),
-                    "e" => params.e = value,
-                    "c" => params.c = Some(value),
-                    "p" => params.p = Some(value),
-                    "q" => params.q = Some(value),
-                    "d" => params.d = Some(value),
-                    "phi" => params.phi = Some(value),
-                    "dp" | "dmp1" => params.dp = Some(value),
-                    "dq" | "dmq1" => params.dq = Some(value),
-                    "qinv" | "iqmp" => params.qinv = Some(value),
-                    "pinv" | "ipmq" => params.pinv = Some(value),
-                    "sumpq" => params.sum_pq = Some(value),
-                    "diffpq" => params.diff_pq = Some(value),
+                match (base_key.as_str(), value) {
+                    ("n", RawValue::Integer(value)) => {
+                        params.n = Some(value);
+                        has_main_key = true;
+                    }
+                    ("e", RawValue::Integer(value)) => {
+                        params.e = value;
+                        has_main_key = true;
+                    }
+                    ("searchbudget", RawValue::Integer(value)) => {
+                        if let Some(budget) = value.to_u64() {
+                            params.search_budget = budget;
+                        } else {
+                            errors.push(format!(
+                                "line {}: invalid value for `{key}`: `{value}` (must fit in u64)",
+                                line_index + 1
+                            ));
+                        }
+                    }
+                    ("c", RawValue::Integer(value)) => {
+                        params.c = Some(value);
+                        has_main_key = true;
+                    }
+                    ("mknown", RawValue::Integer(value)) => params.m_known = Some(value),
+                    ("munknownbits", RawValue::Integer(value)) => {
+                        if let Some(bits) = value.to_usize() {
+                            params.m_unknown_bits = Some(bits);
+                        } else {
+                            errors.push(format!(
+                                "line {}: invalid value for `{key}`: `{value}` (must fit in usize)",
+                                line_index + 1
+                            ));
+                        }
+                    }
+                    ("relatedc", RawValue::Integer(value)) => params.related_c = Some(value),
+                    ("relateda1", RawValue::Integer(value)) => params.related_a1 = Some(value),
+                    ("relatedb1", RawValue::Integer(value)) => params.related_b1 = Some(value),
+                    ("relateda2", RawValue::Integer(value)) => params.related_a2 = Some(value),
+                    ("relatedb2", RawValue::Integer(value)) => params.related_b2 = Some(value),
+                    ("p", value) => Self::set_prime(&mut params.p, &mut params.partial_p, value),
+                    ("partialp", value) => {
+                        Self::set_prime(&mut params.p, &mut params.partial_p, value)
+                    }
+                    ("q", value) => Self::set_prime(&mut params.q, &mut params.partial_q, value),
+                    ("partialq", value) => {
+                        Self::set_prime(&mut params.q, &mut params.partial_q, value)
+                    }
+                    ("d", RawValue::Integer(value)) => params.d = Some(value),
+                    ("partiald", RawValue::Integer(value)) => params.partial_d = Some(value),
+                    ("partialdbits", RawValue::Integer(value)) => {
+                        params.partial_d_bits = value.to_usize();
+                    }
+                    ("dknownmsb", RawValue::Integer(value)) => {
+                        params.d_known_msb = Some(value);
+                    }
+                    ("dunknownbits", RawValue::Integer(value)) => {
+                        if let Some(bits) = value.to_usize() {
+                            params.d_unknown_bits = Some(bits);
+                        } else {
+                            errors.push(format!(
+                                "line {}: invalid value for `{key}`: `{value}` (must fit in usize)",
+                                line_index + 1
+                            ));
+                        }
+                    }
+                    ("phi", RawValue::Integer(value)) => params.phi = Some(value),
+                    ("dp" | "dmp1", RawValue::Integer(value)) => params.dp = Some(value),
+                    ("dq" | "dmq1", RawValue::Integer(value)) => params.dq = Some(value),
+                    ("qinv" | "iqmp", RawValue::Integer(value)) => params.qinv = Some(value),
+                    ("pinv" | "ipmq", RawValue::Integer(value)) => params.pinv = Some(value),
+                    ("sumpq", RawValue::Integer(value)) => params.sum_pq = Some(value),
+                    ("diffpq", RawValue::Integer(value)) => params.diff_pq = Some(value),
                     _ => {}
                 }
             }
@@ -562,10 +815,20 @@ impl Parameters {
                 .collect();
         }
 
-        if params.n.is_none() {
-            if let (Some(p), Some(q)) = (&params.p, &params.q) {
-                params.n = Some((p * q).into());
+        // Indexed-only input uses the lowest-indexed key as the main key.
+        if !has_main_key {
+            let mut entries = std::mem::take(&mut params.keys).into_iter();
+            if let Some(first) = entries.next() {
+                params.n = first.n;
+                params.e = first.e;
+                params.c = first.c;
+                params.keys = entries.collect();
             }
+        }
+
+        params.derive_known_values();
+        if let Err(error) = params.validate_advanced_inputs() {
+            errors.push(error);
         }
 
         (params, errors)
@@ -865,8 +1128,32 @@ impl AddAssign for Parameters {
         if self.e == 65537 {
             self.e = rhs.e;
         }
+        if self.search_budget == DEFAULT_SEARCH_BUDGET {
+            self.search_budget = rhs.search_budget;
+        }
         if self.c.is_none() {
             self.c = rhs.c;
+        }
+        if self.m_known.is_none() {
+            self.m_known = rhs.m_known;
+        }
+        if self.m_unknown_bits.is_none() {
+            self.m_unknown_bits = rhs.m_unknown_bits;
+        }
+        if self.related_c.is_none() {
+            self.related_c = rhs.related_c;
+        }
+        if self.related_a1.is_none() {
+            self.related_a1 = rhs.related_a1;
+        }
+        if self.related_b1.is_none() {
+            self.related_b1 = rhs.related_b1;
+        }
+        if self.related_a2.is_none() {
+            self.related_a2 = rhs.related_a2;
+        }
+        if self.related_b2.is_none() {
+            self.related_b2 = rhs.related_b2;
         }
         if self.p.is_none() {
             self.p = rhs.p;
@@ -876,6 +1163,18 @@ impl AddAssign for Parameters {
         }
         if self.d.is_none() {
             self.d = rhs.d;
+        }
+        if self.partial_d.is_none() {
+            self.partial_d = rhs.partial_d;
+        }
+        if self.partial_d_bits.is_none() {
+            self.partial_d_bits = rhs.partial_d_bits;
+        }
+        if self.d_known_msb.is_none() {
+            self.d_known_msb = rhs.d_known_msb;
+        }
+        if self.d_unknown_bits.is_none() {
+            self.d_unknown_bits = rhs.d_unknown_bits;
         }
         if self.phi.is_none() {
             self.phi = rhs.phi;
@@ -906,12 +1205,194 @@ impl AddAssign for Parameters {
         }
         // Extend keys vector with new keys
         self.keys.extend(rhs.keys);
+        self.derive_known_values();
     }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn raw_parses_search_budget_and_display_round_trips() {
+        let params = Parameters::try_from_raw("n = 3233\nsearch_budget = 0\n").unwrap();
+        assert_eq!(params.search_budget, 0);
+        assert!(params.to_string().contains("search_budget = 0"));
+    }
+
+    #[test]
+    fn raw_parses_message_msb_fields() {
+        let params =
+            Parameters::try_from_raw("n = 3233\nm_known = 21\nm_unknown_bits = 1\n").unwrap();
+        assert_eq!(params.m_known, Some(21.into()));
+        assert_eq!(params.m_unknown_bits, Some(1));
+        assert!(params.to_string().contains("m_unknown_bits = 1"));
+    }
+
+    #[test]
+    fn raw_parses_franklin_reiter_fields() {
+        let params = Parameters::try_from_raw(
+            "n = 3233\nrelated_c = 1411\nrelated_a1 = 2\nrelated_b1 = 3\nrelated_a2 = 3\nrelated_b2 = 5\n",
+        )
+        .unwrap();
+        assert_eq!(params.related_c, Some(1411.into()));
+        assert_eq!(params.related_a1, Some(2.into()));
+        assert_eq!(params.related_b1, Some(3.into()));
+        assert_eq!(params.related_a2, Some(3.into()));
+        assert_eq!(params.related_b2, Some(5.into()));
+    }
+
+    #[test]
+    fn raw_parses_uppercase_franklin_reiter_fields() {
+        let params = Parameters::try_from_raw(
+            "n = 3233\nRELATED_C = 1411\nRELATED_A1 = 2\nRELATED_B1 = 3\nRELATED_A2 = 3\nRELATED_B2 = 5\n",
+        )
+        .unwrap();
+        assert_eq!(params.related_c, Some(1411.into()));
+        assert_eq!(params.related_a1, Some(2.into()));
+        assert_eq!(params.related_b1, Some(3.into()));
+        assert_eq!(params.related_a2, Some(3.into()));
+        assert_eq!(params.related_b2, Some(5.into()));
+        assert!(params.keys.is_empty());
+    }
+
+    #[test]
+    fn franklin_reiter_fields_must_be_provided_together() {
+        for field in [
+            "related_c",
+            "related_a1",
+            "related_b1",
+            "related_a2",
+            "related_b2",
+        ] {
+            let mut raw = "n = 3233\n".to_string();
+            for other in [
+                "related_c",
+                "related_a1",
+                "related_b1",
+                "related_a2",
+                "related_b2",
+            ] {
+                if other != field {
+                    raw.push_str(&format!("{other} = 1\n"));
+                }
+            }
+            let error = Parameters::try_from_raw(&raw).unwrap_err();
+            assert!(error.contains("must be provided together"), "{error}");
+        }
+    }
+
+    #[test]
+    fn related_c_is_independent_of_indexed_c2() {
+        let params = Parameters::try_from_raw(
+            "n = 3233\nc = 1680\nc2 = 999\nrelated_c = 1411\nrelated_a1 = 2\nrelated_b1 = 3\nrelated_a2 = 3\nrelated_b2 = 5\n",
+        )
+        .unwrap();
+        assert_eq!(params.c, Some(1680.into()));
+        assert_eq!(params.related_c, Some(1411.into()));
+        assert_eq!(params.keys[0].c, Some(999.into()));
+    }
+
+    #[test]
+    fn message_msb_fields_must_be_paired() {
+        let error = Parameters::try_from_raw("n = 3233\nm_known = 21\n").unwrap_err();
+        assert!(error.contains("m_known"));
+        assert!(error.contains("m_unknown_bits"));
+    }
+
+    #[test]
+    fn message_msb_unknown_bits_must_not_exceed_modulus() {
+        let error =
+            Parameters::try_from_raw("n = 3233\nm_known = 21\nm_unknown_bits = 13\n").unwrap_err();
+        assert!(error.contains("m_unknown_bits"));
+    }
+
+    #[test]
+    fn message_msb_unknown_bits_rejects_non_usize() {
+        let error = Parameters::try_from_raw(
+            "n = 3233\nm_known = 21\nm_unknown_bits = 18446744073709551616\n",
+        )
+        .unwrap_err();
+        assert!(error.contains("m_unknown_bits"));
+        assert!(error.contains("usize"));
+    }
+
+    #[test]
+    fn message_msb_fields_merge_without_overwriting() {
+        let mut params = Parameters::default();
+        params += Parameters::try_from_raw("n = 3233\nm_known = 21\nm_unknown_bits = 1\n").unwrap();
+        params += Parameters::default();
+
+        assert_eq!(params.m_known, Some(21.into()));
+        assert_eq!(params.m_unknown_bits, Some(1));
+    }
+
+    #[test]
+    fn raw_parses_d_msb_fields_and_display_round_trips() {
+        let params =
+            Parameters::try_from_raw("n = 3233\nd_known_msb = 171\nd_unknown_bits = 4\n").unwrap();
+        let displayed = params.to_string();
+
+        assert_eq!(params.d_known_msb, Some(171.into()));
+        assert_eq!(params.d_unknown_bits, Some(4));
+        assert!(displayed.contains("d_known_msb = 171"));
+        assert!(displayed.contains("d_unknown_bits = 4"));
+    }
+
+    #[test]
+    fn d_msb_fields_must_be_paired() {
+        for raw in [
+            "n = 3233\nd_known_msb = 171\n",
+            "n = 3233\nd_unknown_bits = 4\n",
+        ] {
+            let error = Parameters::try_from_raw(raw).unwrap_err();
+            assert!(error.contains("d_known_msb"));
+            assert!(error.contains("d_unknown_bits"));
+        }
+    }
+
+    #[test]
+    fn d_msb_unknown_bits_must_not_exceed_modulus() {
+        let error = Parameters::try_from_raw("n = 3233\nd_known_msb = 171\nd_unknown_bits = 13\n")
+            .unwrap_err();
+        assert!(error.contains("d_unknown_bits"));
+    }
+
+    #[test]
+    fn d_msb_unknown_bits_rejects_non_usize() {
+        let error = Parameters::try_from_raw(
+            "n = 3233\nd_known_msb = 171\nd_unknown_bits = 18446744073709551616\n",
+        )
+        .unwrap_err();
+        assert!(error.contains("d_unknown_bits"));
+        assert!(error.contains("usize"));
+    }
+
+    #[test]
+    fn d_msb_fields_merge_without_overwriting() {
+        let mut params = Parameters::default();
+        params +=
+            Parameters::try_from_raw("n = 3233\nd_known_msb = 171\nd_unknown_bits = 4\n").unwrap();
+        params += Parameters::try_from_raw("d_known_msb = 170\nd_unknown_bits = 5\n").unwrap();
+        params += Parameters::default();
+
+        assert_eq!(params.d_known_msb, Some(171.into()));
+        assert_eq!(params.d_unknown_bits, Some(4));
+    }
+
+    #[test]
+    fn raw_rejects_search_budget_above_u64() {
+        let error = Parameters::try_from_raw("n = 3233\nsearch_budget = 18446744073709551616\n")
+            .unwrap_err();
+        assert!(error.contains("search_budget"));
+    }
+
+    #[test]
+    fn merging_default_params_preserves_custom_search_budget() {
+        let mut params = Parameters::try_from_raw("n = 3233\nsearch_budget = 0\n").unwrap();
+        params += Parameters::default();
+        assert_eq!(params.search_budget, 0);
+    }
 
     #[test]
     fn raw_derives_modulus_from_known_primes() {
@@ -922,10 +1403,83 @@ mod tests {
     }
 
     #[test]
+    fn raw_derives_phi_from_known_primes() {
+        let params = Parameters::from_raw("p = 61\nq = 53\n");
+        assert_eq!(params.phi, Some(Integer::from(60 * 52)));
+    }
+
+    #[test]
+    fn merging_known_primes_derives_modulus_and_phi() {
+        let mut params = Parameters::default();
+        params += Parameters {
+            p: Some(Integer::from(61)),
+            q: Some(Integer::from(53)),
+            ..Default::default()
+        };
+
+        assert_eq!(params.n, Some(Integer::from(3233)));
+        assert_eq!(params.phi, Some(Integer::from(3120)));
+    }
+
+    #[test]
     fn strict_raw_parser_reports_invalid_field() {
         let error = Parameters::try_from_raw("# comment\nn = invalid\n").unwrap_err();
         assert!(error.contains("n"));
         assert!(error.contains("invalid"));
+    }
+
+    #[test]
+    fn strict_raw_parser_rejects_unknown_field() {
+        let error = Parameters::try_from_raw("n = 3233\nmodulu = 3233\n").unwrap_err();
+        assert!(error.contains("modulu"));
+        assert!(error.contains("unknown field"));
+    }
+
+    #[test]
+    fn raw_parses_partial_primes() {
+        let params = Parameters::try_from_raw("n = 3233\np = 0x3d??\nq = 0x...35\n").unwrap();
+
+        assert!(matches!(
+            params.partial_p,
+            Some(PartialPrime::Partial {
+                radix: 16,
+                k: Some(2),
+                orient: Orientation::MsbKnown,
+                ..
+            })
+        ));
+        assert!(matches!(
+            params.partial_q,
+            Some(PartialPrime::Partial {
+                radix: 16,
+                k: None,
+                orient: Orientation::LsbKnown,
+                ..
+            })
+        ));
+    }
+
+    #[test]
+    fn raw_parses_explicit_partial_prime_fields() {
+        let params =
+            Parameters::try_from_raw("n = 3233\npartial_p = 0x3d??\npartial_q = 0x...35\n")
+                .unwrap();
+
+        assert!(params.partial_p.is_some());
+        assert!(params.partial_q.is_some());
+        assert!(params.p.is_none());
+        assert!(params.q.is_none());
+    }
+
+    #[test]
+    fn raw_parses_partial_d_fields() {
+        let params =
+            Parameters::try_from_raw("n = 3233\ne = 17\npartial_d = 5\npartial_d_bits = 4\n")
+                .unwrap();
+        let displayed = params.to_string();
+
+        assert!(displayed.contains("partial_d = 5"));
+        assert!(displayed.contains("partial_d_bits = 4"));
     }
 
     #[test]

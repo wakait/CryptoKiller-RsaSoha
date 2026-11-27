@@ -33,6 +33,10 @@ impl Attack for HastadBroadcastAttack {
         AttackKind::MultiKey
     }
 
+    fn required_parameters(&self) -> &'static [&'static str] {
+        &["e (相同)", "n/c (至少 e 组)"]
+    }
+
     fn run(&self, params: &Parameters, _pb: Option<&ProgressBar>) -> Result<Solution, Error> {
         // Collect all keys with the same exponent e
         let e = &params.e;

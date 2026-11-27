@@ -116,6 +116,14 @@ impl Attack for CipollaAttack {
         AttackKind::KnownExtraInformation
     }
 
+    fn required_parameters(&self) -> &'static [&'static str] {
+        &["n (素数)", "e = 2", "c"]
+    }
+
+    fn supports_prime_modulus(&self) -> bool {
+        true
+    }
+
     fn run(&self, params: &Parameters, pb: Option<&ProgressBar>) -> Result<Solution, Error> {
         let e = &params.e;
         let n = params.n.as_ref().ok_or(Error::MissingParameters)?;
