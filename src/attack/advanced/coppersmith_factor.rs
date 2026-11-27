@@ -51,9 +51,9 @@ impl CoppersmithFactorAttack {
             if radix_power <= 0 {
                 return Err(Error::Unsupported);
             }
-            let base = Integer::from(known * &radix_power);
+            let base = (known * &radix_power).complete();
             if k.is_none() {
-                let largest_candidate = Integer::from(&base + &radix_power) - Integer::from(1);
+                let largest_candidate = (&base + &radix_power).complete() - Integer::from(1);
                 if largest_candidate.pow(2) <= *n {
                     error = Error::Unsupported;
                     continue;
@@ -80,7 +80,7 @@ impl CoppersmithFactorAttack {
 
             for root in roots {
                 control.check_cancelled()?;
-                let candidate = Integer::from(&base + root);
+                let candidate = &base + root;
                 if candidate <= 1 || candidate >= *n {
                     continue;
                 }
@@ -213,7 +213,7 @@ mod tests {
     fn coppersmith_factor_recovers_partial_q_without_consuming_budget() {
         let (p, q) = fixture();
         let params = Parameters {
-            n: Some((&p * &q).into()),
+            n: Some((&p * &q).complete()),
             partial_q: Some(crate::PartialPrime::Partial {
                 radix: 16,
                 k: Some(10),
@@ -271,7 +271,7 @@ mod tests {
         let offset = Integer::from(1000);
         let p: Integer = (two.clone().pow(101) - &offset).next_prime();
         let q: Integer = (two.clone().pow(100) + &offset).next_prime();
-        let n = Integer::from(&p * &q);
+        let n = (&p * &q).complete();
         let known: Integer = p.clone() >> 14;
         assert_eq!(n.significant_bits() / 2 - known.significant_bits(), 14);
         assert!(Integer::from(2).pow(56) < n);

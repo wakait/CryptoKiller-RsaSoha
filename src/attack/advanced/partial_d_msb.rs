@@ -11,6 +11,17 @@ use crate::{
 
 const MAX_SMALL_INTERVAL_CANDIDATES: u64 = CANCEL_CHECK_BATCH as u64;
 
+struct SmallIntervalContext<'a> {
+    n: &'a Integer,
+    e: &'a Integer,
+    s_hi: &'a Integer,
+    s_step: &'a Integer,
+    count: u64,
+    d_lower: &'a Integer,
+    d_upper: &'a Integer,
+    control: &'a AttackControl,
+}
+
 /// Recover an RSA private key from known most-significant bits of `d`.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct PartialDMsbAttack;
@@ -33,23 +44,19 @@ fn ceil_sqrt(value: &Integer) -> Integer {
 }
 
 fn solve_x_residue(e: &Integer, k: &Integer, rhs: &Integer) -> Option<Integer> {
-    let gcd = Integer::from(e.gcd_ref(k));
-    if Integer::from(rhs % &gcd) != 0 {
+    let gcd = e.gcd_ref(k).complete();
+    if (rhs % &gcd).complete() != 0 {
         return None;
     }
-    let step = Integer::from(k / &gcd);
+    let step = (k / &gcd).complete();
     if step == 1 {
         return Some(Integer::ZERO);
     }
-    let reduced_e = Integer::from(e / &gcd);
-    let reduced_rhs = Integer::from(rhs / &gcd);
-    let inverse = Integer::from(reduced_e.invert_ref(&step)?);
-    let residue = Integer::from(&reduced_rhs * inverse) % &step;
-    Some(if residue < 0 {
-        Integer::from(residue + step)
-    } else {
-        residue
-    })
+    let reduced_e = (e / &gcd).complete();
+    let reduced_rhs = (rhs / &gcd).complete();
+    let inverse: Integer = reduced_e.invert_ref(&step)?.complete();
+    let residue = &reduced_rhs * inverse % &step;
+    Some(if residue < 0 { residue + step } else { residue })
 }
 
 fn validate_private_key(
@@ -67,11 +74,11 @@ fn validate_private_key(
         return None;
     }
     let phi = private_key.phi();
-    let ed = Integer::from(&private_key.e * &private_key.d);
-    if phi <= 0 || Integer::from(&ed % &phi) != 1 {
+    let ed = (&private_key.e * &private_key.d).complete();
+    if phi <= 0 || (&ed % &phi).complete() != 1 {
         return None;
     }
-    let k = Integer::from(&ed - Integer::from(1)) / &phi;
+    let k = (&ed - Integer::ONE).complete() / &phi;
     if k < 1 || k >= private_key.e {
         return None;
     }
@@ -86,9 +93,9 @@ fn candidate_to_key(
     d_lower: &Integer,
     d_upper: &Integer,
 ) -> Option<PrivateKey> {
-    if p <= &Integer::from(1)
-        || q <= &Integer::from(1)
-        || Integer::from(p * q) != *n
+    if *p <= 1
+        || *q <= 1
+        || (p * q).complete() != *n
         || p.is_probably_prime(100) == IsPrime::No
         || q.is_probably_prime(100) == IsPrime::No
     {
@@ -99,20 +106,20 @@ fn candidate_to_key(
 }
 
 fn larger_factor_bounds(n: &Integer, s_lo: &Integer, s_hi: &Integer) -> Option<(Integer, Integer)> {
-    let four_n = Integer::from(n << 2);
-    let disc_lo = Integer::from(s_lo.clone().pow(2) - &four_n);
-    let disc_hi = Integer::from(s_hi.clone().pow(2) - &four_n);
+    let four_n = n.clone() << 2;
+    let disc_lo = s_lo.clone().pow(2) - &four_n;
+    let disc_hi = s_hi.clone().pow(2) - &four_n;
     if disc_lo < 0 || disc_hi < 0 {
         return None;
     }
 
     let root_lo = integer_sqrt(&disc_lo);
-    let numerator_lo = Integer::from(s_lo + &root_lo);
-    let mut p_lo = Integer::from(&numerator_lo / Integer::from(2));
-    if is_perfect_square(&disc_lo).is_none() || Integer::from(&numerator_lo % 2) != 0 {
+    let numerator_lo = (s_lo + &root_lo).complete();
+    let mut p_lo = &numerator_lo / Integer::from(2);
+    if is_perfect_square(&disc_lo).is_none() || !numerator_lo.is_even() {
         p_lo += Integer::from(1);
     }
-    let p_hi = Integer::from((s_hi + integer_sqrt(&disc_hi)) / Integer::from(2));
+    let p_hi = (s_hi + integer_sqrt(&disc_hi)) / Integer::from(2);
     (p_lo <= p_hi).then_some((p_lo, p_hi))
 }
 
@@ -129,7 +136,7 @@ fn common_msb_partial(
         return Ok((PartialPrime::Full(p_lo.clone()), p_lo.clone(), p_hi));
     }
 
-    let difference = Integer::from(&p_lo ^ &p_hi);
+    let difference = (&p_lo ^ &p_hi).complete();
     let unknown_bits =
         usize::try_from(difference.significant_bits()).map_err(|_| Error::Unsupported)?;
     let exponent = u32::try_from(unknown_bits).map_err(|_| Error::Unsupported)?;
@@ -141,38 +148,38 @@ fn common_msb_partial(
         radix: 2,
         k: Some(unknown_bits),
         orient: Orientation::MsbKnown,
-        known: Integer::from(&p_lo >> unknown_bits),
+        known: (&p_lo >> unknown_bits).complete(),
     };
     Ok((partial, p_lo, p_hi))
 }
 
 fn enumerate_small_interval(
-    n: &Integer,
-    e: &Integer,
-    s_hi: &Integer,
-    s_step: &Integer,
-    count: u64,
-    d_lower: &Integer,
-    d_upper: &Integer,
-    control: &AttackControl,
+    context: &SmallIntervalContext<'_>,
 ) -> Result<Option<PrivateKey>, Error> {
-    control.reserve_candidates(count)?;
-    for index in 0..count {
-        if index % CANCEL_CHECK_BATCH as u64 == 0 {
-            control.check_cancelled()?;
+    context.control.reserve_candidates(context.count)?;
+    for index in 0..context.count {
+        if index.is_multiple_of(CANCEL_CHECK_BATCH as u64) {
+            context.control.check_cancelled()?;
         }
-        let s = Integer::from(s_hi - &Integer::from(index) * s_step);
-        let Some(root) =
-            is_perfect_square(&Integer::from(s.clone().pow(2) - Integer::from(n << 2)))
-        else {
+        let s = (context.s_hi - &Integer::from(index) * context.s_step).complete();
+        let four_n = context.n.clone() << 2;
+        let discriminant = s.clone().pow(2) - four_n;
+        let Some(root) = is_perfect_square(&discriminant) else {
             continue;
         };
-        if Integer::from(Integer::from(&s + &root) % 2) != 0 {
+        if !(&s + &root).complete().is_even() {
             continue;
         }
-        let p = Integer::from(&s - &root) / Integer::from(2);
-        let q = Integer::from(&s + &root) / Integer::from(2);
-        if let Some(private_key) = candidate_to_key(n, e, &p, &q, d_lower, d_upper) {
+        let p = (&s - &root).complete() / Integer::from(2);
+        let q = (&s + &root).complete() / Integer::from(2);
+        if let Some(private_key) = candidate_to_key(
+            context.n,
+            context.e,
+            &p,
+            &q,
+            context.d_lower,
+            context.d_upper,
+        ) {
             return Ok(Some(private_key));
         }
     }
@@ -247,46 +254,58 @@ impl Attack for PartialDMsbAttack {
         }
 
         let unknown_space = Integer::from(2).pow(exponent);
-        let base = Integer::from(known * &unknown_space);
-        let d_upper = Integer::from((known + Integer::from(1)) * &unknown_space);
-        let s_min = ceil_sqrt(&Integer::from(n << 2));
+        let base = (known * &unknown_space).complete();
+        let d_upper = (known.clone() + 1) * &unknown_space;
+        let s_min = ceil_sqrt(&(n.clone() << 2));
         let mut error = Error::NotFound;
+        let small_interval_limit = Integer::from(MAX_SMALL_INTERVAL_CANDIDATES);
 
         for k_value in 1..e_u32 {
-            if k_value % CANCEL_CHECK_BATCH as u32 == 0 {
+            if k_value.is_multiple_of(CANCEL_CHECK_BATCH as u32) {
                 control.check_cancelled()?;
             }
             let k = Integer::from(k_value);
-            let rhs = Integer::from(1) - Integer::from(e * &base);
+            let rhs = Integer::ONE.clone() - e * &base;
             let Some(x_first) = solve_x_residue(e, &k, &rhs) else {
                 continue;
             };
             if x_first >= unknown_space {
                 continue;
             }
-            let gcd = Integer::from(e.gcd_ref(&k));
-            let x_step = Integer::from(&k / &gcd);
-            let s_step = Integer::from(e / &gcd);
-            let d_first = Integer::from(&base + &x_first);
-            let ed_minus_one = Integer::from(Integer::from(e * &d_first) - Integer::from(1));
-            let phi = Integer::from(&ed_minus_one / &k);
-            let s_first = Integer::from(n + Integer::from(1)) - phi;
+            let gcd = e.gcd_ref(&k).complete();
+            let x_step = (&k / &gcd).complete();
+            let s_step = (e / &gcd).complete();
+            let d_first = (&base + &x_first).complete();
+            let ed_minus_one = e * &d_first - Integer::from(1);
+            let phi = (&ed_minus_one / &k).complete();
+            let s_first: Integer = n.clone() + 1 - &phi;
             if s_first < s_min {
                 continue;
             }
-            let s_count = Integer::from(&s_first - &s_min) / &s_step + Integer::from(1);
-            let x_count = Integer::from(&unknown_space - Integer::from(1) - &x_first) / &x_step
-                + Integer::from(1);
+            let s_span = s_first.clone() - s_min.clone();
+            let s_count = s_span / &s_step + Integer::ONE;
+            let x_count = (&unknown_space - Integer::from(1) - &x_first) / &x_step + Integer::ONE;
             let count = if s_count < x_count { s_count } else { x_count };
-            let last_offset = Integer::from(&count - Integer::from(1));
-            let x_last = Integer::from(&x_first + Integer::from(&last_offset * &x_step));
-            let s_lo = Integer::from(&s_first - Integer::from(&last_offset * &s_step));
+            let last_offset = &count - Integer::from(1);
+            let x_offset = (&last_offset * &x_step).complete();
+            let s_offset = (&last_offset * &s_step).complete();
+            let x_last = &x_first + x_offset;
+            let s_lo = &s_first - s_offset;
             debug_assert!(x_last < unknown_space);
             debug_assert!(s_lo >= s_min);
 
-            let result = if count <= Integer::from(MAX_SMALL_INTERVAL_CANDIDATES) {
+            let result = if count <= small_interval_limit {
                 let count = count.to_u64().ok_or(Error::Unsupported)?;
-                enumerate_small_interval(n, e, &s_first, &s_step, count, &base, &d_upper, control)
+                enumerate_small_interval(&SmallIntervalContext {
+                    n,
+                    e,
+                    s_hi: &s_first,
+                    s_step: &s_step,
+                    count,
+                    d_lower: &base,
+                    d_upper: &d_upper,
+                    control,
+                })
             } else {
                 recover_large_interval(n, e, &s_lo, &s_first, &base, &d_upper, control)
             };
@@ -329,8 +348,8 @@ mod tests {
         assert_eq!(pk.p(), 53);
         assert_eq!(pk.q(), 61);
         assert_eq!(pk.d, 2753);
-        let ed = Integer::from(&pk.e * &pk.d);
-        assert_eq!(ed % &pk.phi(), Integer::from(1));
+        let ed = (&pk.e * &pk.d).complete();
+        assert_eq!((&ed % &pk.phi()).complete(), Integer::from(1));
     }
 
     #[test]
@@ -443,7 +462,7 @@ mod tests {
         let e = Integer::from(5);
         let expected = PrivateKey::from_p_q(&p, &q, &e).unwrap();
         let params = Parameters {
-            n: Some((&p * &q).into()),
+            n: Some((&p * &q).complete()),
             e,
             d_known_msb: Some(expected.d.clone() >> 40),
             d_unknown_bits: Some(40),
@@ -470,7 +489,7 @@ mod tests {
         let e = Integer::from(17);
         let expected = PrivateKey::from_p_q(&p, &q, &e).unwrap();
         let params = Parameters {
-            n: Some((&p * &q).into()),
+            n: Some((&p * &q).complete()),
             e,
             d_known_msb: Some(expected.d.clone() >> 70),
             d_unknown_bits: Some(70),

@@ -1,7 +1,7 @@
 use std::collections::{BTreeMap, BTreeSet};
 
 use indicatif::ProgressBar;
-use rug::{integer::IsPrime, ops::Pow, Integer};
+use rug::{integer::IsPrime, ops::Pow, Complete, Integer};
 
 use crate::{
     attack::MAX_LLL_DIMENSION,
@@ -21,6 +21,17 @@ const MAX_BOUNDED_Y_CANDIDATES: usize = 4096;
 /// reduced rows are always tried first; larger bases are never scanned exhaustively.
 const MAX_LATTICE_RESULTANT_PAIRS: usize = 16;
 
+type LatticeResult = Result<(Vec<(u32, u32, u32)>, Vec<Vec<Integer>>), Error>;
+
+struct RecoveryContext<'a> {
+    n: &'a Integer,
+    e: &'a Integer,
+    a: &'a Integer,
+    x_bound: &'a Integer,
+    y_bound: &'a Integer,
+    control: &'a AttackControl,
+}
+
 /// Recover a balanced RSA key with a conservatively small private exponent.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct BonehDurfeeAttack;
@@ -30,36 +41,41 @@ fn candidate_to_key(n: Integer, e: Integer, d: Integer, y: Integer) -> Option<Pr
         return None;
     }
 
-    let s = Integer::from(-2 * y);
-    let discriminant = Integer::from(s.clone().pow(2) - Integer::from(n.clone() << 2));
+    let s: Integer = -2 * y;
+    let discriminant = s.clone().pow(2) - (n.clone() << 2);
     let root = is_perfect_square(&discriminant)?;
-    let p_numerator = Integer::from(&s + &root);
-    let q_numerator = Integer::from(&s - &root);
-    if Integer::from(&p_numerator % 2) != 0 || Integer::from(&q_numerator % 2) != 0 {
+    let p_numerator: Integer = (&s + &root).complete();
+    let q_numerator: Integer = (&s - &root).complete();
+    if !p_numerator.is_even() || !q_numerator.is_even() {
         return None;
     }
-    let p = Integer::from(p_numerator / 2);
-    let q = Integer::from(q_numerator / 2);
-    if p <= 1 || q <= 1 || Integer::from(&p * &q) != n {
+    let p: Integer = p_numerator / 2;
+    let q: Integer = q_numerator / 2;
+    let product = p.clone() * q.clone();
+    if p <= 1 || q <= 1 || product != n {
         return None;
     }
     if p.is_probably_prime(100) == IsPrime::No || q.is_probably_prime(100) == IsPrime::No {
         return None;
     }
 
-    let p_minus_one = Integer::from(&p - 1);
-    let q_minus_one = Integer::from(&q - 1);
-    let phi = Integer::from(&p_minus_one * &q_minus_one);
-    let ed = Integer::from(&e * &d);
-    if phi <= 0 || Integer::from(&ed % &phi) != 1 {
+    let p_minus_one = p.clone() - 1;
+    let q_minus_one = q.clone() - 1;
+    let phi = p_minus_one * q_minus_one;
+    let ed = (&e * &d).complete();
+    if phi <= 0 {
+        return None;
+    }
+    let ed_remainder = ed % phi;
+    if ed_remainder != 1 {
         return None;
     }
     let private_key = PrivateKey::from_p_q(p, q, e.clone()).ok()?;
-    let private_ed = Integer::from(&private_key.e * &private_key.d);
+    let private_ed = (&private_key.e * &private_key.d).complete();
     if private_key.n != n
         || private_key.e != e
         || private_key.d != d
-        || Integer::from(&private_ed % &private_key.phi()) != 1
+        || (&private_ed % &private_key.phi()).complete() != 1
     {
         return None;
     }
@@ -79,9 +95,7 @@ fn x_shift(polynomial: &BivariatePolynomial, shift: u32, scale: &Integer) -> Biv
         polynomial
             .terms
             .iter()
-            .map(|(&(u, x, y), coefficient)| {
-                ((u, x + shift, y), Integer::from(coefficient * scale))
-            })
+            .map(|(&(u, x, y), coefficient)| ((u, x + shift, y), (coefficient * scale).complete()))
             .collect(),
     )
     .canonicalize()
@@ -92,25 +106,18 @@ fn y_shift(polynomial: &BivariatePolynomial, shift: u32, scale: &Integer) -> Biv
         polynomial
             .terms
             .iter()
-            .map(|(&(u, x, y), coefficient)| {
-                ((u, x, y + shift), Integer::from(coefficient * scale))
-            })
+            .map(|(&(u, x, y), coefficient)| ((u, x, y + shift), (coefficient * scale).complete()))
             .collect(),
     )
     .canonicalize()
 }
 
-fn build_lattice(
-    n: &Integer,
-    e: &Integer,
-    m: u32,
-    control: &AttackControl,
-) -> Result<(Vec<(u32, u32, u32)>, Vec<Vec<Integer>>), Error> {
+fn build_lattice(n: &Integer, e: &Integer, m: u32, control: &AttackControl) -> LatticeResult {
     control.check_cancelled()?;
-    let a = Integer::from(Integer::from(n + 1) / 2);
-    let x_bound = Integer::from(2 * integer_nth_root(n, 4) + 2);
-    let y_bound = Integer::from(integer_sqrt(n) + 1);
-    let u_scale = Integer::from(Integer::from(&x_bound * &y_bound) + 1);
+    let a: Integer = (n.clone() + 1) / 2;
+    let x_bound: Integer = 2 * integer_nth_root(n, 4) + 2;
+    let y_bound: Integer = integer_sqrt(n) + 1;
+    let u_scale: Integer = x_bound.clone() * y_bound.clone() + 1;
     let f = f_polynomial(&a);
     let t = m * (DELTA.1 - 2 * DELTA.0) / DELTA.1;
 
@@ -119,7 +126,7 @@ fn build_lattice(
     for k in 0..=m {
         control.check_cancelled()?;
         let power = f.pow(k);
-        let scale = Integer::from(e.pow(m - k));
+        let scale = e.pow(m - k).complete();
         for i in 0..=m - k {
             control.check_cancelled()?;
             let polynomial = x_shift(&power, i, &scale);
@@ -135,7 +142,7 @@ fn build_lattice(
         for k in (m / t) * j..=m {
             control.check_cancelled()?;
             let power = f.pow(k);
-            let scale = Integer::from(e.pow(m - k));
+            let scale = e.pow(m - k).complete();
             let polynomial = y_shift(&power, j, &scale);
             monomials.extend(polynomial.terms.keys().copied());
             polynomials.push(polynomial);
@@ -153,11 +160,7 @@ fn build_lattice(
     }
     let scales: Vec<_> = monomials
         .iter()
-        .map(|&(u, x, y)| {
-            Integer::from(u_scale.clone().pow(u))
-                * Integer::from(x_bound.clone().pow(x))
-                * Integer::from(y_bound.clone().pow(y))
-        })
+        .map(|&(u, x, y)| u_scale.clone().pow(u) * x_bound.clone().pow(x) * y_bound.clone().pow(y))
         .collect();
     let mut basis = Vec::with_capacity(dimension);
     for polynomial in polynomials {
@@ -172,7 +175,7 @@ fn build_lattice(
         );
         for (&monomial, scale) in monomials.iter().zip(&scales) {
             let coefficient = polynomial.terms.get(&monomial).cloned().unwrap_or_default();
-            row.push(Integer::from(coefficient * scale));
+            row.push(coefficient * scale);
         }
         basis.push(row);
     }
@@ -205,10 +208,9 @@ fn polynomial_from_row(
         }
         let mut binomial = Integer::ONE.clone();
         for power in 0..=u {
-            *terms.entry((0, x + power, y + power)).or_default() +=
-                Integer::from(&coefficient * &binomial);
+            *terms.entry((0, x + power, y + power)).or_default() += &coefficient * &binomial;
             if power < u {
-                binomial = Integer::from(&binomial * (u - power)) / (power + 1);
+                binomial = (&binomial * (u - power)).complete() / (power + 1);
             }
         }
     }
@@ -223,8 +225,8 @@ fn polynomials_are_proportional(left: &BivariatePolynomial, right: &BivariatePol
         return false;
     };
     left.terms.keys().chain(right.terms.keys()).all(|monomial| {
-        Integer::from(left.terms.get(monomial).unwrap_or(&Integer::ZERO) * right_coefficient)
-            == Integer::from(right.terms.get(monomial).unwrap_or(&Integer::ZERO) * left_coefficient)
+        (left.terms.get(monomial).unwrap_or(&Integer::ZERO) * right_coefficient).complete()
+            == (right.terms.get(monomial).unwrap_or(&Integer::ZERO) * left_coefficient).complete()
     })
 }
 
@@ -242,8 +244,9 @@ fn signed_roots(
         .roots(control)?
         .into_iter()
         .map(|root| {
-            if Integer::from(&root * 2) > *modulus {
-                Integer::from(root - modulus)
+            let doubled = root.clone() * 2;
+            if doubled > *modulus {
+                root - modulus
             } else {
                 root
             }
@@ -273,7 +276,7 @@ fn specialize_x(
         control.check_cancelled()?;
         for (&(_, x, coefficient_y), coefficient) in &polynomial.terms {
             if coefficient_y == y_degree {
-                coefficients[x as usize] += Integer::from(coefficient * &power);
+                coefficients[x as usize] += coefficient * &power;
             }
         }
         power *= y;
@@ -288,10 +291,11 @@ fn candidate_from_x_y(
     x: Integer,
     y: Integer,
 ) -> Option<PrivateKey> {
-    if Integer::from(&x % 2) != 0 {
+    if !x.is_even() {
         return None;
     }
-    let numerator = Integer::from(Integer::from(&x * Integer::from(a + &y)) + 1);
+    let sum: Integer = (a + &y).complete();
+    let numerator: Integer = x * sum + 1;
     if numerator <= 0 {
         return None;
     }
@@ -352,27 +356,22 @@ fn recover_from_bounded_y(
 }
 
 fn recover_from_rows(
-    n: &Integer,
-    e: &Integer,
-    a: &Integer,
-    x_bound: &Integer,
-    y_bound: &Integer,
+    context: &RecoveryContext<'_>,
     monomials: &[(u32, u32, u32)],
     scales: &[Integer],
     rows: &[Vec<Integer>],
-    control: &AttackControl,
 ) -> Result<Option<PrivateKey>, Error> {
-    control.check_cancelled()?;
+    context.control.check_cancelled()?;
     if rows.len() < 2 {
         return Err(Error::Unsupported);
     }
     let mut polynomials = Vec::new();
     for row in rows {
-        control.check_cancelled()?;
+        context.control.check_cancelled()?;
         if row.iter().all(|coefficient| *coefficient == 0) {
             continue;
         }
-        let polynomial = polynomial_from_row(row, monomials, scales, control)?;
+        let polynomial = polynomial_from_row(row, monomials, scales, context.control)?;
         polynomials.push(polynomial);
     }
     if polynomials.is_empty() {
@@ -381,38 +380,26 @@ fn recover_from_rows(
 
     // Integer row combinations need no modulo-e factorization or common-factor
     // stripping. Cap the number of resultants independently of basis dimension.
-    recover_from_independent_pairs(n, e, a, x_bound, y_bound, &polynomials, control)
+    recover_from_independent_pairs(context, &polynomials)
 }
 
 fn recover_from_independent_pairs(
-    n: &Integer,
-    e: &Integer,
-    a: &Integer,
-    x_bound: &Integer,
-    y_bound: &Integer,
+    context: &RecoveryContext<'_>,
     polynomials: &[BivariatePolynomial],
-    control: &AttackControl,
 ) -> Result<Option<PrivateKey>, Error> {
     let mut attempted = 0usize;
     for left in 0..polynomials.len() {
-        control.check_cancelled()?;
+        context.control.check_cancelled()?;
         for right in left + 1..polynomials.len() {
             if attempted == MAX_LATTICE_RESULTANT_PAIRS {
                 return Ok(None);
             }
-            control.check_cancelled()?;
+            context.control.check_cancelled()?;
             attempted += 1;
             if !polynomials_are_proportional(&polynomials[left], &polynomials[right]) {
-                if let Some(private_key) = recover_from_pair(
-                    n,
-                    e,
-                    a,
-                    x_bound,
-                    y_bound,
-                    &polynomials[left],
-                    &polynomials[right],
-                    control,
-                )? {
+                if let Some(private_key) =
+                    recover_from_pair(context, &polynomials[left], &polynomials[right])?
+                {
                     return Ok(Some(private_key));
                 }
             }
@@ -422,16 +409,11 @@ fn recover_from_independent_pairs(
 }
 
 fn recover_from_pair(
-    n: &Integer,
-    e: &Integer,
-    a: &Integer,
-    x_bound: &Integer,
-    y_bound: &Integer,
+    context: &RecoveryContext<'_>,
     h1: &BivariatePolynomial,
     h2: &BivariatePolynomial,
-    control: &AttackControl,
 ) -> Result<Option<PrivateKey>, Error> {
-    control.check_cancelled()?;
+    context.control.check_cancelled()?;
     let (h1, h2) = if h1.terms.keys().any(|monomial| monomial.1 != 0) {
         (h1, h2)
     } else if h2.terms.keys().any(|monomial| monomial.1 != 0) {
@@ -442,25 +424,27 @@ fn recover_from_pair(
     if h1.terms.is_empty() || h2.terms.is_empty() {
         return Ok(None);
     }
-    let resultant = h1.resultant(h2, control)?;
+    let resultant = h1.resultant(h2, context.control)?;
     if resultant.len() <= 1 || resultant.iter().all(|coefficient| *coefficient == 0) {
         return Ok(None);
     }
-    let y_roots = integer_roots(&resultant, y_bound, control)?;
+    let y_roots = integer_roots(&resultant, context.y_bound, context.control)?;
     for y in y_roots {
-        control.check_cancelled()?;
+        context.control.check_cancelled()?;
         let x_polynomials = [h1, h2]
             .into_iter()
-            .map(|polynomial| specialize_x(polynomial, &y, control))
+            .map(|polynomial| specialize_x(polynomial, &y, context.control))
             .collect::<Result<Vec<_>, _>>()?;
         for coefficients in x_polynomials {
             if coefficients.iter().all(|coefficient| *coefficient == 0) {
                 continue;
             }
-            let x_roots = integer_roots(&coefficients, x_bound, control)?;
+            let x_roots = integer_roots(&coefficients, context.x_bound, context.control)?;
             for x in x_roots {
-                control.check_cancelled()?;
-                if let Some(private_key) = candidate_from_x_y(n, e, a, x, y.clone()) {
+                context.control.check_cancelled()?;
+                if let Some(private_key) =
+                    candidate_from_x_y(context.n, context.e, context.a, x, y.clone())
+                {
                     return Ok(Some(private_key));
                 }
             }
@@ -502,10 +486,18 @@ impl Attack for BonehDurfeeAttack {
         if *n <= 1 || *e < 2 || e.is_probably_prime(100) == IsPrime::No {
             return Err(Error::Unsupported);
         }
-        let a = Integer::from(Integer::from(n + 1) / 2);
-        let x_bound = Integer::from(2 * integer_nth_root(n, 4) + 2);
-        let y_bound = Integer::from(integer_sqrt(n) + 1);
-        let u_scale = Integer::from(Integer::from(&x_bound * &y_bound) + 1);
+        let a: Integer = (n.clone() + 1) / 2;
+        let x_bound: Integer = 2 * integer_nth_root(n, 4) + 2;
+        let y_bound: Integer = integer_sqrt(n) + 1;
+        let u_scale: Integer = x_bound.clone() * y_bound.clone() + 1;
+        let context = RecoveryContext {
+            n,
+            e,
+            a: &a,
+            x_bound: &x_bound,
+            y_bound: &y_bound,
+            control,
+        };
 
         for m in LATTICE_PARAMETERS {
             control.check_cancelled()?;
@@ -513,9 +505,7 @@ impl Attack for BonehDurfeeAttack {
             let scales: Vec<_> = monomials
                 .iter()
                 .map(|&(u, x, y)| {
-                    Integer::from(u_scale.clone().pow(u))
-                        * Integer::from(x_bound.clone().pow(x))
-                        * Integer::from(y_bound.clone().pow(y))
+                    u_scale.clone().pow(u) * x_bound.clone().pow(x) * y_bound.clone().pow(y)
                 })
                 .collect();
             let reduced = if y_bound
@@ -533,9 +523,7 @@ impl Attack for BonehDurfeeAttack {
             } else {
                 lll(&basis, control)?
             };
-            if let Some(private_key) = recover_from_rows(
-                n, e, &a, &x_bound, &y_bound, &monomials, &scales, &reduced, control,
-            )? {
+            if let Some(private_key) = recover_from_rows(&context, &monomials, &scales, &reduced)? {
                 return Ok(Solution::new_pk(self.name(), private_key));
             }
         }
@@ -617,7 +605,7 @@ mod tests {
     fn boneh_durfee_bounded_y_recovers_signed_x_root() {
         let n = Integer::from(3233);
         let e = Integer::from(1783);
-        let a = Integer::from(Integer::from(&n + 1) / 2);
+        let a: Integer = (n.clone() + 1) / 2;
         let control = AttackControl::default();
         let rows = vec![f_polynomial(&a)];
         let key = recover_from_bounded_y(&n, &e, &a, &16.into(), &57.into(), &rows, &control)
@@ -630,7 +618,7 @@ mod tests {
     fn boneh_durfee_bounded_y_reserves_entire_shared_interval() {
         let n = Integer::from(3233);
         let e = Integer::from(1783);
-        let a = Integer::from(Integer::from(&n + 1) / 2);
+        let a: Integer = (n.clone() + 1) / 2;
         let rows = vec![f_polynomial(&a)];
 
         let control = AttackControl::new(114);
@@ -668,41 +656,41 @@ mod tests {
     fn boneh_durfee_row_scan_continues_past_degenerate_resultants() {
         let n = Integer::from(3233);
         let e = Integer::from(1783);
-        let a = Integer::from(Integer::from(&n + 1) / 2);
+        let a: Integer = (n.clone() + 1) / 2;
         let control = AttackControl::default();
+        let x_bound = Integer::from(16);
+        let y_bound = Integer::from(57);
+        let context = RecoveryContext {
+            n: &n,
+            e: &e,
+            a: &a,
+            x_bound: &x_bound,
+            y_bound: &y_bound,
+            control: &control,
+        };
         let monomials = vec![(0, 2, 0), (0, 1, 1), (0, 1, 0), (0, 0, 1)];
         let scales = vec![Integer::ONE.clone(); monomials.len()];
         // h1 = x+y+49. h2 = h1*(x+1) has zero resultant with h1.
         // h3 is constant, and h4 = x-8 yields the valid fixed-key resultant.
-        let rows = vec![
-            vec![49.into(), 0.into(), 0.into(), 1.into(), 1.into()],
-            vec![49.into(), 1.into(), 1.into(), 50.into(), 1.into()],
-            vec![2.into(), 0.into(), 0.into(), 0.into(), 0.into()],
-            vec![(-8).into(), 0.into(), 0.into(), 1.into(), 0.into()],
+        let rows = [
+            [49.into(), 0.into(), 0.into(), 1.into(), 1.into()],
+            [49.into(), 1.into(), 1.into(), 50.into(), 1.into()],
+            [2.into(), 0.into(), 0.into(), 0.into(), 0.into()],
+            [(-8).into(), 0.into(), 0.into(), 1.into(), 0.into()],
         ];
         let h1 = polynomial_from_row(&rows[0], &monomials, &scales, &control).unwrap();
         let h4 = polynomial_from_row(&rows[3], &monomials, &scales, &control).unwrap();
         assert!(
-            recover_from_pair(&n, &e, &a, &16.into(), &57.into(), &h1, &h4, &control,)
-                .unwrap()
-                .is_some(),
+            recover_from_pair(&context, &h1, &h4).unwrap().is_some(),
             "direct valid pair should recover the fixed key"
         );
         let polynomials: Vec<_> = rows
             .iter()
             .map(|row| polynomial_from_row(row, &monomials, &scales, &control).unwrap())
             .collect();
-        let key = recover_from_independent_pairs(
-            &n,
-            &e,
-            &a,
-            &16.into(),
-            &57.into(),
-            &polynomials,
-            &control,
-        )
-        .unwrap()
-        .expect("row scan should continue past zero and constant resultants");
+        let key = recover_from_independent_pairs(&context, &polynomials)
+            .unwrap()
+            .expect("row scan should continue past zero and constant resultants");
         assert_eq!(key.d, Integer::from(7));
     }
 
@@ -710,17 +698,15 @@ mod tests {
     fn boneh_durfee_reconstructed_lattice_rows_vanish_at_small_root_mod_e() {
         let n = Integer::from_str("236894635691475796834317810819055966273").unwrap();
         let e = Integer::from_str("157929757127650531202356698060357130499").unwrap();
-        let x_bound = Integer::from(2 * integer_nth_root(&n, 4) + 2);
-        let y_bound = Integer::from(integer_sqrt(&n) + 1);
-        let u_scale: Integer = Integer::from(&x_bound * &y_bound) + 1;
+        let x_bound: Integer = 2 * integer_nth_root(&n, 4) + 2;
+        let y_bound: Integer = integer_sqrt(&n) + 1;
+        let u_scale: Integer = x_bound.clone() * y_bound.clone() + 1;
         let control = AttackControl::default();
         let (monomials, basis) = build_lattice(&n, &e, 4, &control).unwrap();
         let scales: Vec<_> = monomials
             .iter()
             .map(|&(u, x, y)| {
-                Integer::from(u_scale.clone().pow(u))
-                    * Integer::from(x_bound.clone().pow(x))
-                    * Integer::from(y_bound.clone().pow(y))
+                u_scale.clone().pow(u) * x_bound.clone().pow(x) * y_bound.clone().pow(y)
             })
             .collect();
 
@@ -732,10 +718,10 @@ mod tests {
             let coefficients = specialize_x(&polynomial, &y0, &control).unwrap();
             let mut value = Integer::ZERO;
             for coefficient in coefficients.iter().rev() {
-                value = Integer::from(&value * &x0 + coefficient);
+                value = (&value * &x0 + coefficient).complete();
             }
             assert_eq!(
-                Integer::from(&value % &e),
+                (&value % &e).complete(),
                 Integer::ZERO,
                 "lattice row {index} must vanish at the RSA small root modulo e"
             );
@@ -751,51 +737,52 @@ mod tests {
         let q = Integer::from(2111);
         let n = Integer::from(4228333);
         let e = Integer::from(2816147);
-        let a = Integer::from(Integer::from(&n + 1) / 2);
-        let x_bound = Integer::from(2 * integer_nth_root(&n, 4) + 2);
-        let y_bound = Integer::from(integer_sqrt(&n) + 1);
-        assert_eq!(Integer::from(&p * &q), n);
+        let a: Integer = (n.clone() + 1) / 2;
+        let x_bound: Integer = 2 * integer_nth_root(&n, 4) + 2;
+        let y_bound: Integer = integer_sqrt(&n) + 1;
+        assert_eq!((&p * &q).complete(), n);
         assert!(y_bound > 2047);
         assert_eq!(y_bound, Integer::from(2057));
         let d = Integer::from(3);
         let x0 = Integer::from(4);
         let y0 = Integer::from(-2057);
         assert!(y0.clone().abs() <= y_bound);
-        let phi = Integer::from(Integer::from(&p - 1) * Integer::from(&q - 1));
-        assert_eq!(Integer::from(&e * &d) - 1, Integer::from(2 * &phi));
-        assert_eq!(
-            Integer::from(1 + &x0 * Integer::from(&a + &y0)),
-            Integer::from(&e * &d)
-        );
+        let phi = (p.clone() - 1) * (q.clone() - 1);
+        let ed_minus_one = (&e * &d).complete() - 1;
+        let two_phi: Integer = Integer::from(2) * &phi;
+        assert_eq!(ed_minus_one, two_phi);
+        let lhs: Integer = 1 + x0.clone() * (a.clone() + y0.clone());
+        assert_eq!(lhs, (&e * &d).complete());
         assert_eq!(e.is_probably_prime(100), IsPrime::Yes);
 
         let control = AttackControl::new(0);
+        let context = RecoveryContext {
+            n: &n,
+            e: &e,
+            a: &a,
+            x_bound: &x_bound,
+            y_bound: &y_bound,
+            control: &control,
+        };
         let mut recovered = None;
         for m in LATTICE_PARAMETERS {
             let (monomials, basis) = build_lattice(&n, &e, m, &control).unwrap();
-            let u_scale: Integer = Integer::from(&x_bound * &y_bound) + 1;
+            let u_scale: Integer = x_bound.clone() * y_bound.clone() + 1;
             let scales: Vec<_> = monomials
                 .iter()
                 .map(|&(u, x, y)| {
-                    Integer::from(u_scale.clone().pow(u))
-                        * Integer::from(x_bound.clone().pow(x))
-                        * Integer::from(y_bound.clone().pow(y))
+                    u_scale.clone().pow(u) * x_bound.clone().pow(x) * y_bound.clone().pow(y)
                 })
                 .collect();
             let reduced = crate::math::lattice::lll(&basis, &control).unwrap();
             let h1 = polynomial_from_row(&reduced[0], &monomials, &scales, &control).unwrap();
             let h2 = polynomial_from_row(&reduced[1], &monomials, &scales, &control).unwrap();
-            let first_pair_key =
-                recover_from_pair(&n, &e, &a, &x_bound, &y_bound, &h1, &h2, &control).unwrap();
+            let first_pair_key = recover_from_pair(&context, &h1, &h2).unwrap();
             assert!(
                 first_pair_key.is_none(),
                 "m={m} first two rows have a cancelling resultant; the capped scan must continue"
             );
-            if let Some(key) = recover_from_rows(
-                &n, &e, &a, &x_bound, &y_bound, &monomials, &scales, &reduced, &control,
-            )
-            .unwrap()
-            {
+            if let Some(key) = recover_from_rows(&context, &monomials, &scales, &reduced).unwrap() {
                 recovered = Some(key);
                 break;
             }

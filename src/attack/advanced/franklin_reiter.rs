@@ -1,5 +1,5 @@
 use indicatif::ProgressBar;
-use rug::{ops::RemRounding, Integer};
+use rug::{ops::RemRounding, Complete, Integer};
 
 use crate::{
     attack::{AttackControl, Error, MAX_POLYNOMIAL_DEGREE},
@@ -58,11 +58,11 @@ impl Attack for FranklinReiterAttack {
 
         // Floor-modulo normalization makes polynomial construction and final
         // verification agree for non-canonical positive and negative inputs.
-        let c = Integer::from(c.rem_floor(n));
-        let related_c = Integer::from(related_c.rem_floor(n));
+        let c = c.rem_floor(n).complete();
+        let related_c = related_c.rem_floor(n).complete();
 
         // The two affine maps must be independent over Z/nZ.
-        let determinant = Integer::from(a1 * b2) - Integer::from(a2 * b1);
+        let determinant = (a1 * b2).complete() - (a2 * b1).complete();
         determinant.invert_ref(n).ok_or(Error::Unsupported)?;
 
         let f1 = Polynomial::from_affine_power(a1, b1, exponent, &c, n.clone());
@@ -79,11 +79,11 @@ impl Attack for FranklinReiterAttack {
 
         // A linear monic GCD over a composite modulus is x + constant.
         let x = Integer::from(-&gcd.coeffs[0]) % n;
-        let x = if x < 0 { Integer::from(x + n) } else { x };
-        let m1 = Integer::from(a1 * &x + b1) % n;
-        let m1 = if m1 < 0 { Integer::from(m1 + n) } else { m1 };
-        let m2 = Integer::from(a2 * &x + b2) % n;
-        let m2 = if m2 < 0 { Integer::from(m2 + n) } else { m2 };
+        let x = if x < 0 { x + n } else { x };
+        let m1 = (a1 * &x + b1).complete() % n;
+        let m1 = if m1 < 0 { m1 + n } else { m1 };
+        let m2 = (a2 * &x + b2).complete() % n;
+        let m2 = if m2 < 0 { m2 + n } else { m2 };
         if m1
             .clone()
             .pow_mod(&params.e, n)

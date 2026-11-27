@@ -171,18 +171,14 @@ fn eval_integer_polynomial(coefficients: &[Integer], x: &Integer) -> Integer {
     coefficients
         .iter()
         .rev()
-        .fold(Integer::ZERO, |value, coefficient| {
-            Integer::from(value * x + coefficient)
-        })
+        .fold(Integer::ZERO, |value, coefficient| value * x + coefficient)
 }
 
 fn integer_powers(base: &Integer, count: usize) -> Result<Vec<Integer>, Error> {
     let mut powers = Vec::with_capacity(count);
     powers.push(Integer::from(1));
     for _ in 1..count {
-        powers.push(Integer::from(
-            powers.last().ok_or(Error::Unsupported)? * base,
-        ));
+        powers.push((powers.last().ok_or(Error::Unsupported)? * base).complete());
     }
     Ok(powers)
 }
@@ -197,7 +193,7 @@ fn shifted_polynomial(
     for (degree, coefficient) in polynomial.iter().enumerate() {
         let column = degree.checked_add(shift).ok_or(Error::Unsupported)?;
         let target = row.get_mut(column).ok_or(Error::Unsupported)?;
-        *target = Integer::from(coefficient * scalar);
+        *target = (coefficient * scalar).complete();
     }
     Ok(row)
 }
@@ -234,8 +230,7 @@ fn integer_polynomial_mul(left: &[Integer], right: &[Integer]) -> Result<Vec<Int
     let mut product = vec![Integer::ZERO; coefficient_count];
     for (left_degree, left_coefficient) in left.iter().enumerate() {
         for (right_degree, right_coefficient) in right.iter().enumerate() {
-            product[left_degree + right_degree] +=
-                Integer::from(left_coefficient * right_coefficient);
+            product[left_degree + right_degree] += left_coefficient * right_coefficient;
         }
     }
     while product.len() > 1 && product.last() == Some(&Integer::ZERO) {
@@ -246,7 +241,7 @@ fn integer_polynomial_mul(left: &[Integer], right: &[Integer]) -> Result<Vec<Int
 
 fn scale_row(mut row: Vec<Integer>, x_powers: &[Integer]) -> Vec<Integer> {
     for (value, power) in row.iter_mut().zip(x_powers) {
-        *value = Integer::from(&*value * power);
+        *value = (&*value * power).complete();
     }
     row
 }
@@ -271,11 +266,11 @@ mod tests {
             "64052533192509995760322742160163582601357132095571262796409705234000154367147",
         )
         .unwrap();
-        let n = Integer::from(&p * &q);
+        let n = (&p * &q).complete();
         let bound = Integer::from(2).pow(40);
         let known = p.clone() >> 40;
-        let base = known << 40;
-        let expected = Integer::from(&p - &base);
+        let base: Integer = known << 40;
+        let expected = p.clone() - base.clone();
         let f = Polynomial::new(vec![base, 1.into()], n.clone()).unwrap();
         let control = AttackControl::new(0);
 

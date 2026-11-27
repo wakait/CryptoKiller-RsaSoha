@@ -11,6 +11,18 @@ use crate::{
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct PartialPrimeAttack;
 
+#[derive(Clone, Copy)]
+struct RecoveryInputs<'a> {
+    known: &'a Integer,
+    radix: u32,
+    k: usize,
+    orient: &'a Orientation,
+    n: &'a Integer,
+    e: &'a Integer,
+    pb: Option<&'a ProgressBar>,
+    control: &'a AttackControl,
+}
+
 impl PartialPrimeAttack {
     fn prefer_error(current: Error, next: Error) -> Error {
         match (current, next) {
@@ -29,8 +41,8 @@ impl PartialPrimeAttack {
         orient: &Orientation,
         n: &Integer,
     ) -> Integer {
-        if radix_k == &Integer::from(0) {
-            return Integer::from(0);
+        if radix_k == &Integer::ZERO {
+            return Integer::ZERO;
         }
 
         let limit = match orient {
@@ -63,16 +75,17 @@ impl PartialPrimeAttack {
 
     /// Recover prime from partial information.
     /// Generic algorithm: p = known + radix^k * x or known * radix^k + x.
-    fn recover(
-        known: &Integer,
-        radix: u32,
-        k: usize,
-        orient: &Orientation,
-        n: &Integer,
-        e: &Integer,
-        pb: Option<&ProgressBar>,
-        control: &AttackControl,
-    ) -> Result<Integer, Error> {
+    fn recover(inputs: RecoveryInputs<'_>) -> Result<Integer, Error> {
+        let RecoveryInputs {
+            known,
+            radix,
+            k,
+            orient,
+            n,
+            e,
+            pb,
+            control,
+        } = inputs;
         control.check_cancelled()?;
 
         // For radix > 1, radix^k is at least 2^64 when k >= 64, which no
@@ -89,10 +102,13 @@ impl PartialPrimeAttack {
             u32::try_from(k).map_err(|_| Error::Unsupported)?
         };
         let search_space = Integer::from(radix).pow(exponent);
-        if search_space == Integer::from(0) {
+        if search_space == Integer::ZERO {
             return Err(Error::NotFound);
         }
-        if &search_space > &Integer::from(control.remaining()) {
+        if search_space
+            .to_u64()
+            .is_none_or(|space| space > control.remaining())
+        {
             if let Some(pb) = pb {
                 pb.println("Candidate search budget exceeded.");
             }
@@ -137,7 +153,7 @@ impl PartialPrimeAttack {
 
             while x < batch_end {
                 let candidate = match orient {
-                    Orientation::LsbKnown => Integer::from(known + &radix_k * x),
+                    Orientation::LsbKnown => (known + &radix_k * x).complete(),
                     Orientation::MsbKnown => (known * &radix_k).complete() + x,
                 };
 
@@ -227,7 +243,16 @@ impl Attack for PartialPrimeAttack {
                         }
                     }
                     if let Some(k_val) = k {
-                        Self::recover(known, *radix, *k_val, orient, n, e, pb, control)
+                        Self::recover(RecoveryInputs {
+                            known,
+                            radix: *radix,
+                            k: *k_val,
+                            orient,
+                            n,
+                            e,
+                            pb,
+                            control,
+                        })
                     } else {
                         let n_bits = n.significant_bits();
                         let p_bits = n_bits / 2;
@@ -249,7 +274,16 @@ impl Attack for PartialPrimeAttack {
                             }
                             attempted.push(k_try);
 
-                            match Self::recover(known, *radix, k_try, orient, n, e, pb, control) {
+                            match Self::recover(RecoveryInputs {
+                                known,
+                                radix: *radix,
+                                k: k_try,
+                                orient,
+                                n,
+                                e,
+                                pb,
+                                control,
+                            }) {
                                 Ok(result) => return Ok(result),
                                 Err(Error::Cancelled) => return Err(Error::Cancelled),
                                 Err(next) => error = Self::prefer_error(error, next),
@@ -318,7 +352,7 @@ mod tests {
         let p = Integer::from(1073741827u64);
         let q = Integer::from(2147483659u64);
         let params = Parameters {
-            n: Some((&p * &q).into()),
+            n: Some((&p * &q).complete()),
             search_budget: 0,
             partial_p: Some(PartialPrime::Partial {
                 radix: 2,
@@ -339,7 +373,7 @@ mod tests {
         let p = Integer::from(1073741827u64);
         let q = Integer::from(2147483659u64);
         let params = Parameters {
-            n: Some((&p * &q).into()),
+            n: Some((&p * &q).complete()),
             search_budget: 1 << 20,
             partial_p: Some(PartialPrime::Partial {
                 radix: 2,
@@ -389,7 +423,7 @@ mod tests {
         let p = Integer::from(1073741827u64);
         let q = Integer::from(2147483659u64);
         let params = Parameters {
-            n: Some((&p * &q).into()),
+            n: Some((&p * &q).complete()),
             partial_p: Some(PartialPrime::Partial {
                 radix: 2,
                 k: Some(20),
@@ -466,7 +500,7 @@ mod tests {
         // q = 2147483659 (next prime after 2^31)
         let p = Integer::from(1073741827u64);
         let q = Integer::from(2147483659u64);
-        let n = Integer::from(&p * &q);
+        let n = (&p * &q).complete();
 
         // Extract LSB (lower 20 bits known, upper bits unknown)
         let unknown_count = 20;
@@ -498,7 +532,7 @@ mod tests {
         // q = 2147483659 (next prime after 2^31)
         let p = Integer::from(1073741827u64);
         let q = Integer::from(2147483659u64);
-        let n = Integer::from(&p * &q);
+        let n = (&p * &q).complete();
 
         // Extract MSB (upper bits known, lower 20 bits unknown)
         let unknown_count = 20;
@@ -531,7 +565,7 @@ mod tests {
 
         let p = Integer::from(1073741827u64);
         let q = Integer::from(2147483659u64);
-        let n = Integer::from(&p * &q);
+        let n = (&p * &q).complete();
 
         // Parse "10737418??" which represents p with 2 unknown digits
         let arg = PartialPrimeArg::from_str("10737418??").unwrap();
@@ -557,7 +591,7 @@ mod tests {
 
         let p = Integer::from(1073741827u64); // 0x40000003
         let q = Integer::from(2147483659u64);
-        let n = Integer::from(&p * &q);
+        let n = (&p * &q).complete();
 
         // Use ellipsis to indicate unknown MSB
         // p = 0x40000003, so LSB (lower 24 bits) is 0x000003
@@ -585,7 +619,7 @@ mod tests {
 
         let p = Integer::from(1073741827u64); // 0x40000003
         let q = Integer::from(2147483659u64);
-        let n = Integer::from(&p * &q);
+        let n = (&p * &q).complete();
 
         // Use ellipsis to indicate unknown LSB
         // p = 0x40000003, so MSB (upper bits) after shifting right by 24 is 0x40
@@ -617,7 +651,7 @@ mod tests {
         .unwrap();
         let unknown = 40usize;
         let params = Parameters {
-            n: Some((&p * &q).into()),
+            n: Some((&p * &q).complete()),
             search_budget: 0,
             partial_p: Some(PartialPrime::Partial {
                 radix: 2,
@@ -648,7 +682,7 @@ mod tests {
         )
         .unwrap();
         let params = Parameters {
-            n: Some((&p * &q).into()),
+            n: Some((&p * &q).complete()),
             search_budget: 0,
             partial_p: Some(PartialPrime::Partial {
                 radix: 2,
@@ -673,7 +707,7 @@ mod tests {
         let p = Integer::from(61);
         let q = Integer::from(53);
         let params = Parameters {
-            n: Some((&p * &q).into()),
+            n: Some((&p * &q).complete()),
             partial_p: Some(PartialPrime::Partial {
                 radix: 2,
                 k: Some(4),

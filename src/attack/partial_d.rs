@@ -48,7 +48,7 @@ impl Attack for PartialDAttack {
         }
         let known_bits = known_bits as u32;
         let known_mask = (Integer::from(1) << known_bits) - 1;
-        let d_lsb = Integer::from(d_lsb & known_mask);
+        let d_lsb = d_lsb & known_mask;
 
         for k in 1..e_u32 {
             let d_candidate = (n.clone() * k + 1u64) / e;

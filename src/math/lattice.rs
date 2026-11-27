@@ -1,6 +1,6 @@
 //! Exact rational Gram–Schmidt orthogonalization and LLL reduction.
 
-use rug::{Integer, Rational};
+use rug::{Complete, Integer, Rational};
 
 use crate::attack::{
     AttackControl, Error, CANCEL_CHECK_BATCH, MAX_LLL_DIMENSION, MAX_LLL_ITERATIONS,
@@ -11,7 +11,7 @@ use crate::attack::{
 pub fn gram_schmidt(basis: &[Vec<Integer>]) -> Result<(Vec<Vec<Rational>>, Vec<Rational>), Error> {
     validate_basis_shape(basis)?;
     let dimension = basis.len();
-    let mut mu = vec![vec![Rational::from(0); dimension]; dimension];
+    let mut mu = vec![vec![Rational::ZERO.clone(); dimension]; dimension];
     let mut norms: Vec<Rational> = Vec::with_capacity(dimension);
     let mut orthogonal: Vec<Vec<Rational>> = Vec::with_capacity(dimension);
     for (i, row) in basis.iter().enumerate() {
@@ -20,20 +20,18 @@ pub fn gram_schmidt(basis: &[Vec<Integer>]) -> Result<(Vec<Vec<Rational>>, Vec<R
             let dot = current
                 .iter()
                 .zip(&orthogonal[j])
-                .map(|(left, right): (&Rational, &Rational)| {
-                    Rational::from(left.clone() * right.clone())
-                })
+                .map(|(left, right): (&Rational, &Rational)| left.clone() * right.clone())
                 .sum::<Rational>();
-            mu[i][j] = Rational::from(dot / norms[j].clone());
+            mu[i][j] = dot / norms[j].clone();
             for (coordinate, projection) in current.iter_mut().zip(&orthogonal[j]) {
-                *coordinate -= Rational::from(mu[i][j].clone() * projection.clone());
+                *coordinate -= mu[i][j].clone() * projection.clone();
             }
         }
         let norm = current
             .iter()
-            .map(|coordinate| Rational::from(coordinate.clone() * coordinate.clone()))
+            .map(|coordinate| coordinate.clone() * coordinate.clone())
             .sum::<Rational>();
-        if norm == 0 {
+        if &norm == Rational::ZERO {
             return Err(Error::Unsupported);
         }
         orthogonal.push(current);
@@ -54,7 +52,7 @@ pub fn lll(basis: &[Vec<Integer>], control: &AttackControl) -> Result<Vec<Vec<In
     let mut k = 1;
     let mut iterations = 0usize;
     while k < reduced.len() {
-        if iterations % CANCEL_CHECK_BATCH == 0 {
+        if iterations.is_multiple_of(CANCEL_CHECK_BATCH) {
             control.check_cancelled()?;
         }
         if iterations >= MAX_LLL_ITERATIONS {
@@ -67,20 +65,20 @@ pub fn lll(basis: &[Vec<Integer>], control: &AttackControl) -> Result<Vec<Vec<In
                 for coordinate in 0..reduced[0].len() {
                     let source = reduced[j][coordinate].clone();
                     reduced[k][coordinate] =
-                        Integer::from(&reduced[k][coordinate] - &quotient * &source);
+                        (&reduced[k][coordinate] - &quotient * &source).complete();
                 }
                 // b_k <- b_k - q*b_j leaves b_k^* unchanged. Update only
                 // its Gram--Schmidt coordinates instead of recomputing the
                 // entire exact orthogonalization.
                 for index in 0..j {
-                    let projection = Rational::from(&quotient * &mu[j][index]);
+                    let projection = (&quotient * &mu[j][index]).complete();
                     mu[k][index] -= projection;
                 }
-                mu[k][j] -= Rational::from(quotient);
+                mu[k][j] -= quotient;
             }
         }
-        let square = Rational::from(mu[k][k - 1].clone() * mu[k][k - 1].clone());
-        let lovasz_rhs = Rational::from((delta.clone() - square) * norms[k - 1].clone());
+        let square = mu[k][k - 1].clone() * mu[k][k - 1].clone();
+        let lovasz_rhs = (delta.clone() - square) * norms[k - 1].clone();
         if norms[k] >= lovasz_rhs {
             k += 1;
         } else {
@@ -99,32 +97,29 @@ fn update_after_swap(mu: &mut [Vec<Rational>], norms: &mut [Rational], k: usize)
     let coupling = mu[k][k - 1].clone();
     let previous_norm = norms[k - 1].clone();
     let current_norm = norms[k].clone();
-    let coupling_squared = Rational::from(coupling.clone() * coupling.clone());
-    let new_previous_norm =
-        Rational::from(current_norm.clone() + coupling_squared * previous_norm.clone());
-    let alpha =
-        Rational::from(coupling.clone() * previous_norm.clone() / new_previous_norm.clone());
-    let one_minus_coupling_alpha = Rational::from(1 - coupling.clone() * alpha.clone());
-    let new_current_norm = Rational::from(previous_norm * current_norm / new_previous_norm.clone());
+    let coupling_squared = coupling.clone() * coupling.clone();
+    let new_previous_norm = current_norm.clone() + coupling_squared * previous_norm.clone();
+    let alpha = coupling.clone() * previous_norm.clone() / new_previous_norm.clone();
+    let one_minus_coupling_alpha: Rational = 1 - coupling.clone() * alpha.clone();
+    let new_current_norm = previous_norm * current_norm / new_previous_norm.clone();
 
     let old_previous_lower = mu[k - 1][..k - 1].to_vec();
     let old_current_lower = mu[k][..k - 1].to_vec();
 
-    for row in k + 1..mu.len() {
-        let old_previous = mu[row][k - 1].clone();
-        let old_current = mu[row][k].clone();
-        mu[row][k - 1] = Rational::from(
-            old_current.clone() * one_minus_coupling_alpha.clone()
-                + old_previous.clone() * alpha.clone(),
-        );
-        mu[row][k] = Rational::from(old_previous - coupling.clone() * old_current);
+    for mu_row in mu.iter_mut().skip(k + 1) {
+        let old_previous = mu_row[k - 1].clone();
+        let old_current = mu_row[k].clone();
+        mu_row[k - 1] = old_current.clone() * one_minus_coupling_alpha.clone()
+            + old_previous.clone() * alpha.clone();
+        mu_row[k] = old_previous - coupling.clone() * old_current;
     }
 
-    for index in 0..k - 1 {
-        mu[k - 1][index] = old_current_lower[index].clone();
-        mu[k][index] = old_previous_lower[index].clone();
-    }
-    mu[k - 1][k - 1] = Rational::from(0);
+    let (previous_row, current_rows) = mu[k - 1..=k]
+        .split_first_mut()
+        .expect("two adjacent Gram--Schmidt rows");
+    previous_row[..k - 1].clone_from_slice(&old_current_lower);
+    current_rows[0][..k - 1].clone_from_slice(&old_previous_lower);
+    mu[k - 1][k - 1] = Rational::ZERO.clone();
     mu[k][k - 1] = alpha;
     norms[k - 1] = new_previous_norm;
     norms[k] = new_current_norm;
@@ -145,11 +140,11 @@ fn validate_basis_shape(basis: &[Vec<Integer>]) -> Result<(), Error> {
 fn nearest_integer(value: &Rational) -> Integer {
     let numerator = value.numer().clone().abs();
     let denominator = value.denom().clone().abs();
-    let mut rounded = Integer::from(&numerator / &denominator);
-    if Integer::from(&numerator % &denominator) * 2 >= denominator {
+    let mut rounded = (&numerator / &denominator).complete();
+    if ((&numerator % &denominator).complete() * 2) >= denominator {
         rounded += 1;
     }
-    if *value < Rational::from(0) {
+    if value < Rational::ZERO {
         -rounded
     } else {
         rounded
@@ -270,13 +265,13 @@ mod tests {
                     for coordinate in 0..reduced[0].len() {
                         let source = reduced[j][coordinate].clone();
                         reduced[k][coordinate] =
-                            Integer::from(&reduced[k][coordinate] - &quotient * &source);
+                            (&reduced[k][coordinate] - &quotient * &source).complete();
                     }
                     (mu, norms) = gram_schmidt(&reduced).unwrap();
                 }
             }
-            let square = Rational::from(mu[k][k - 1].clone() * mu[k][k - 1].clone());
-            let lovasz_rhs = Rational::from((delta.clone() - square) * norms[k - 1].clone());
+            let square = mu[k][k - 1].clone() * mu[k][k - 1].clone();
+            let lovasz_rhs = (delta.clone() - square) * norms[k - 1].clone();
             if norms[k] >= lovasz_rhs {
                 k += 1;
             } else {
@@ -362,9 +357,9 @@ mod tests {
         // det([[4, 1], [2, 2]]) = 6; LLL uses only unimodular row operations.
         let basis = [vec![4.into(), 1.into()], vec![2.into(), 2.into()]];
         let reduced = lll(&basis, &AttackControl::default()).unwrap();
-        let positive = Integer::from(&reduced[0][0] * &reduced[1][1]);
-        let negative = Integer::from(&reduced[0][1] * &reduced[1][0]);
-        let determinant: Integer = positive - negative;
+        let positive = &reduced[0][0] * &reduced[1][1];
+        let negative = &reduced[0][1] * &reduced[1][0];
+        let determinant: Integer = positive.complete() - negative.complete();
         assert_eq!(determinant.abs(), Integer::from(6));
     }
 }

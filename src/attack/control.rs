@@ -65,7 +65,7 @@ impl AttackControl {
             return Ok(());
         }
         self.used
-            .fetch_update(Ordering::SeqCst, Ordering::SeqCst, |used| {
+            .try_update(Ordering::SeqCst, Ordering::SeqCst, |used| {
                 if self.is_cancelled() {
                     return None;
                 }

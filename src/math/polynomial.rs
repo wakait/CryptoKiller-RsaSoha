@@ -2,7 +2,7 @@
 
 use std::collections::BTreeMap;
 
-use rug::{ops::DivRounding, Integer, Rational};
+use rug::{ops::DivRounding, Complete, Integer, Rational};
 
 use crate::attack::{
     AttackControl, Error, CANCEL_CHECK_BATCH, MAX_POLYNOMIAL_DEGREE, MAX_ROOT_SPLIT_ATTEMPTS,
@@ -59,10 +59,9 @@ impl Polynomial {
         self.check_same_modulus(other);
         let mut coeffs = vec![Integer::ZERO; self.coeffs.len().max(other.coeffs.len())];
         for (index, coefficient) in coeffs.iter_mut().enumerate() {
-            let sum = Integer::from(
-                self.coeffs.get(index).unwrap_or(&Integer::ZERO)
-                    + other.coeffs.get(index).unwrap_or(&Integer::ZERO),
-            );
+            let sum = (self.coeffs.get(index).unwrap_or(&Integer::ZERO)
+                + other.coeffs.get(index).unwrap_or(&Integer::ZERO))
+            .complete();
             *coefficient = normalize_coefficient(&sum, &self.modulus);
         }
         Self::from_normalized(coeffs, self.modulus.clone())
@@ -72,10 +71,9 @@ impl Polynomial {
         self.check_same_modulus(other);
         let mut coeffs = vec![Integer::ZERO; self.coeffs.len().max(other.coeffs.len())];
         for (index, coefficient) in coeffs.iter_mut().enumerate() {
-            let difference = Integer::from(
-                self.coeffs.get(index).unwrap_or(&Integer::ZERO)
-                    - other.coeffs.get(index).unwrap_or(&Integer::ZERO),
-            );
+            let difference = (self.coeffs.get(index).unwrap_or(&Integer::ZERO)
+                - other.coeffs.get(index).unwrap_or(&Integer::ZERO))
+            .complete();
             *coefficient = normalize_coefficient(&difference, &self.modulus);
         }
         Self::from_normalized(coeffs, self.modulus.clone())
@@ -94,7 +92,7 @@ impl Polynomial {
         let mut coeffs = vec![Integer::ZERO; degree + 1];
         for (i, left) in self.coeffs.iter().enumerate() {
             for (j, right) in other.coeffs.iter().enumerate() {
-                let product = Integer::from(&coeffs[i + j] + left * right);
+                let product = (&coeffs[i + j] + left * right).complete();
                 coeffs[i + j] = normalize_coefficient(&product, &self.modulus);
             }
         }
@@ -158,8 +156,8 @@ impl Polynomial {
         );
         let inverse = divisor.coeffs[divisor_degree]
             .invert_ref(&self.modulus)
-            .map(Integer::from)
-            .ok_or(Error::Unsupported)?;
+            .ok_or(Error::Unsupported)?
+            .complete();
         let mut remainder = self.clone();
         while remainder
             .degree()
@@ -167,11 +165,11 @@ impl Polynomial {
         {
             let degree = remainder.degree().unwrap_or(0);
             let shift = degree - divisor_degree;
-            let product = Integer::from(&remainder.coeffs[degree] * &inverse);
+            let product = (&remainder.coeffs[degree] * &inverse).complete();
             let factor = normalize_coefficient(&product, &self.modulus);
             for (index, coefficient) in divisor.coeffs.iter().enumerate() {
                 let difference =
-                    Integer::from(&remainder.coeffs[index + shift] - &factor * coefficient);
+                    (&remainder.coeffs[index + shift] - &factor * coefficient).complete();
                 remainder.coeffs[index + shift] = normalize_coefficient(&difference, &self.modulus);
             }
             remainder.trim();
@@ -183,13 +181,13 @@ impl Polynomial {
         let degree = self.degree().ok_or(Error::Unsupported)?;
         let inverse = self.coeffs[degree]
             .invert_ref(&self.modulus)
-            .map(Integer::from)
-            .ok_or(Error::Unsupported)?;
+            .ok_or(Error::Unsupported)?
+            .complete();
         Ok(Self::from_normalized(
             self.coeffs
                 .iter()
                 .map(|coefficient| {
-                    let product = Integer::from(coefficient * &inverse);
+                    let product = (coefficient * &inverse).complete();
                     normalize_coefficient(&product, &self.modulus)
                 })
                 .collect(),
@@ -218,7 +216,7 @@ impl Polynomial {
             .iter()
             .rev()
             .fold(Integer::ZERO, |value, coefficient| {
-                let product = Integer::from(value * x + coefficient);
+                let product = value * x + coefficient;
                 normalize_coefficient(&product, &self.modulus)
             })
     }
@@ -239,7 +237,7 @@ impl Polynomial {
         let base = Self::new(vec![b.clone(), a.clone()], modulus.clone())
             .expect("validated polynomial domain and degree");
         let mut result = base.pow(e);
-        let difference = Integer::from(&result.coeffs[0] - c);
+        let difference = (&result.coeffs[0] - c).complete();
         result.coeffs[0] = normalize_coefficient(&difference, &modulus);
         result.trim();
         result
@@ -314,7 +312,7 @@ pub fn integer_roots(
     let mut roots = Vec::new();
     let mut visited = 0usize;
     while let Some((left, right)) = pending.pop() {
-        if visited % CANCEL_CHECK_BATCH == 0 {
+        if visited.is_multiple_of(CANCEL_CHECK_BATCH) {
             control.check_cancelled()?;
         }
         visited += 1;
@@ -322,7 +320,7 @@ pub fn integer_roots(
         if count == 0 {
             continue;
         }
-        if Rational::from(&right - &left) <= 1 {
+        if (&right - &left).complete() <= 1 {
             let first = rational_ceil(&left);
             let last = rational_floor(&right);
             let mut candidate = first;
@@ -336,9 +334,10 @@ pub fn integer_roots(
             }
             continue;
         }
-        let middle = Rational::from(&left + &right) / Rational::from(2);
+        let middle = (&left + &right).complete() / Rational::from(2);
         let middle_integer = rational_floor(&middle);
-        if middle == Rational::from(middle_integer.clone())
+        if middle.numer() == &middle_integer
+            && middle.denom() == Integer::ONE
             && eval_integer(&integer_coeffs, &middle_integer) == 0
         {
             roots.push(middle_integer);
@@ -371,10 +370,7 @@ fn roots_recursive(
         return Ok(Vec::new());
     }
     if degree == 1 {
-        let root = normalize_coefficient(
-            &Integer::from(-polynomial.coeffs[0].clone()),
-            &polynomial.modulus,
-        );
+        let root = normalize_coefficient(&-polynomial.coeffs[0].clone(), &polynomial.modulus);
         return Ok(vec![root]);
     }
     if polynomial.modulus == 2 {
@@ -452,18 +448,20 @@ fn berlekamp_basis(
     )?;
     let mut matrix = vec![vec![Integer::ZERO; dimension]; dimension];
     let prime_u32 = polynomial.modulus.to_u32().ok_or(Error::Unsupported)?;
+    let mut powers = Vec::with_capacity(dimension);
     for column in 0..dimension {
         let exponent = prime_u32
             .checked_mul(u32::try_from(column).map_err(|_| Error::Unsupported)?)
             .ok_or(Error::Unsupported)?;
-        let exponent = u32::try_from(exponent).map_err(|_| Error::Unsupported)?;
-        let power = polynomial_pow_mod(&x, exponent, polynomial, control)?;
-        for row in 0..dimension {
-            matrix[row][column] = power.coeffs.get(row).cloned().unwrap_or_default();
+        powers.push(polynomial_pow_mod(&x, exponent, polynomial, control)?);
+    }
+    for (row, matrix_row) in matrix.iter_mut().enumerate() {
+        for (column, entry) in matrix_row.iter_mut().enumerate() {
+            *entry = powers[column].coeffs.get(row).cloned().unwrap_or_default();
             if row == column {
-                matrix[row][column] -= 1;
+                *entry -= 1;
             }
-            matrix[row][column] = normalize_coefficient(&matrix[row][column], &polynomial.modulus);
+            *entry = normalize_coefficient(entry, &polynomial.modulus);
         }
     }
 
@@ -471,27 +469,31 @@ fn berlekamp_basis(
     let mut rank = 0;
     for column in 0..dimension {
         control.check_cancelled()?;
-        let Some(pivot) = (rank..dimension).find(|row| matrix[*row][column] != 0) else {
+        let Some(pivot) = matrix[rank..]
+            .iter()
+            .position(|row| row[column] != 0)
+            .map(|offset| rank + offset)
+        else {
             continue;
         };
         matrix.swap(rank, pivot);
-        let inverse = matrix[rank][column]
+        let (above, below) = matrix.split_at_mut(rank);
+        let (pivot_row, below) = below.split_first_mut().expect("ranked pivot row");
+        let inverse = pivot_row[column]
             .invert_ref(&polynomial.modulus)
-            .map(Integer::from)
-            .ok_or(Error::Unsupported)?;
-        for value in &mut matrix[rank] {
-            *value = normalize_coefficient(&Integer::from(&*value * &inverse), &polynomial.modulus);
+            .ok_or(Error::Unsupported)?
+            .complete();
+        for value in &mut *pivot_row {
+            *value = normalize_coefficient(&(&*value * &inverse).complete(), &polynomial.modulus);
         }
-        for row in 0..dimension {
-            if row == rank || matrix[row][column] == 0 {
+        for values in above.iter_mut().chain(below.iter_mut()) {
+            let factor = values[column].clone();
+            if factor == 0 {
                 continue;
             }
-            let factor = matrix[row][column].clone();
-            for entry in 0..dimension {
-                let difference = Integer::from(
-                    &matrix[row][entry] - Integer::from(&factor * &matrix[rank][entry]),
-                );
-                matrix[row][entry] = normalize_coefficient(&difference, &polynomial.modulus);
+            for (value, pivot_value) in values.iter_mut().zip(pivot_row.iter()) {
+                let difference = (&*value - &factor * pivot_value).complete();
+                *value = normalize_coefficient(&difference, &polynomial.modulus);
             }
         }
         pivot_columns.push(column);
@@ -519,10 +521,7 @@ fn polynomial_derivative(polynomial: &Polynomial) -> Polynomial {
         .iter()
         .enumerate()
         .map(|(index, coefficient)| {
-            normalize_coefficient(
-                &Integer::from(coefficient * (index + 1)),
-                &polynomial.modulus,
-            )
+            normalize_coefficient(&(coefficient * (index + 1)).complete(), &polynomial.modulus)
         })
         .collect();
     if coeffs.is_empty() {
@@ -555,13 +554,12 @@ fn polynomial_div_exact(dividend: &Polynomial, divisor: &Polynomial) -> Result<P
         let degree = remainder.degree().unwrap_or(0);
         let shift = degree - divisor_degree;
         let factor = normalize_coefficient(
-            &Integer::from(&remainder.coeffs[degree] * &divisor.coeffs[divisor_degree]),
+            &(&remainder.coeffs[degree] * &divisor.coeffs[divisor_degree]).complete(),
             &dividend.modulus,
         );
         quotient[shift] = factor.clone();
         for (index, coefficient) in divisor.coeffs.iter().enumerate() {
-            let difference =
-                Integer::from(&remainder.coeffs[index + shift] - &factor * coefficient);
+            let difference = (&remainder.coeffs[index + shift] - &factor * coefficient).complete();
             remainder.coeffs[index + shift] = normalize_coefficient(&difference, &dividend.modulus);
         }
         remainder.trim();
@@ -608,9 +606,9 @@ fn polynomial_mul_mod(
     let mut coefficients = vec![Integer::ZERO; degree + 1];
     for (left_index, left_coefficient) in left.coeffs.iter().enumerate() {
         for (right_index, right_coefficient) in right.coeffs.iter().enumerate() {
-            let product = Integer::from(left_coefficient * right_coefficient);
+            let product = left_coefficient * right_coefficient;
             coefficients[left_index + right_index] =
-                Integer::from(&coefficients[left_index + right_index] + product);
+                (&coefficients[left_index + right_index] + product).complete();
         }
     }
     for coefficient in &mut coefficients {
@@ -630,9 +628,9 @@ fn polynomial_mul_mod(
 }
 
 fn normalize_coefficient(value: &Integer, modulus: &Integer) -> Integer {
-    let reduced = Integer::from(value % modulus);
+    let reduced = (value % modulus).complete();
     if reduced < 0 {
-        Integer::from(reduced + modulus)
+        reduced + modulus
     } else {
         reduced
     }
@@ -643,7 +641,7 @@ fn rational_floor(value: &Rational) -> Integer {
 }
 
 fn rational_ceil(value: &Rational) -> Integer {
-    let negative_numerator = Integer::from(-value.numer());
+    let negative_numerator = (-value.numer()).complete();
     -negative_numerator.div_floor(value.denom())
 }
 
@@ -651,9 +649,7 @@ fn eval_integer(coeffs: &[Integer], x: &Integer) -> Integer {
     coeffs
         .iter()
         .rev()
-        .fold(Integer::ZERO, |value, coefficient| {
-            Integer::from(value * x + coefficient)
-        })
+        .fold(Integer::ZERO, |value, coefficient| value * x + coefficient)
 }
 
 fn rational_derivative(polynomial: &[Rational]) -> Vec<Rational> {
@@ -663,12 +659,12 @@ fn rational_derivative(polynomial: &[Rational]) -> Vec<Rational> {
     polynomial[1..]
         .iter()
         .enumerate()
-        .map(|(index, coefficient)| Rational::from(coefficient * (index + 1)))
+        .map(|(index, coefficient)| (coefficient * (index + 1)).complete())
         .collect()
 }
 
 fn rational_trim(polynomial: &mut Vec<Rational>) {
-    while polynomial.last() == Some(&Rational::from(0)) {
+    while polynomial.last() == Some(&Rational::ZERO) {
         polynomial.pop();
     }
 }
@@ -688,7 +684,7 @@ fn rational_rem(
         let shift = dividend.len() - divisor.len();
         let factor = dividend.last().expect("non-empty dividend").clone() * &inverse;
         for (index, coefficient) in divisor.iter().enumerate() {
-            dividend[index + shift] -= Rational::from(&factor * coefficient);
+            dividend[index + shift] -= (&factor * coefficient).complete();
         }
         rational_trim(&mut dividend);
     }
@@ -702,8 +698,8 @@ fn sign_variations(sturm: &[Vec<Rational>], x: &Rational) -> usize {
         let value = polynomial
             .iter()
             .rev()
-            .fold(Rational::from(0), |value, coefficient| {
-                Rational::from(Rational::from(value * x) + coefficient)
+            .fold(Rational::ZERO.clone(), |value, coefficient| {
+                value * x + coefficient
             });
         let sign = if value > 0 {
             1
@@ -747,10 +743,10 @@ impl BivariatePolynomial {
             for s in 0..=repeated {
                 let sign = if (repeated - s) % 2 == 0 { 1 } else { -1 };
                 let key = (a + s, b - repeated, c - repeated);
-                let scaled = Integer::from(coefficient * &binomial) * sign;
+                let scaled = (coefficient * &binomial).complete() * sign;
                 *result.entry(key).or_default() += scaled;
                 if s < repeated {
-                    binomial = Integer::from(&binomial * (repeated - s)) / (s + 1);
+                    binomial = (&binomial * (repeated - s)).complete() / (s + 1);
                 }
             }
         }
@@ -870,8 +866,7 @@ impl BivariatePolynomial {
                         .checked_add(right.2)
                         .expect("bivariate y exponent overflow"),
                 );
-                *terms.entry(key).or_default() +=
-                    Integer::from(left_coefficient * right_coefficient);
+                *terms.entry(key).or_default() += left_coefficient * right_coefficient;
             }
         }
         Self::new(terms)
@@ -896,8 +891,7 @@ fn y_mul(left: &YPolynomial, right: &YPolynomial) -> YPolynomial {
             let degree = left_degree
                 .checked_add(right_degree)
                 .expect("resultant y exponent overflow");
-            *result.entry(degree).or_default() +=
-                Integer::from(left_coefficient * right_coefficient);
+            *result.entry(degree).or_default() += left_coefficient * right_coefficient;
         }
     }
     result.retain(|_, coefficient| *coefficient != 0);
@@ -920,7 +914,7 @@ fn y_div_exact(dividend: &YPolynomial, divisor: &YPolynomial) -> YPolynomial {
         assert!(rest == 0, "Bareiss leading coefficient must divide exactly");
         for (&divisor_degree, coefficient) in divisor {
             let target = divisor_degree + shift;
-            *remainder.entry(target).or_default() -= Integer::from(&leading * coefficient);
+            *remainder.entry(target).or_default() -= &leading * coefficient;
         }
         remainder.retain(|_, coefficient| *coefficient != 0);
         if leading != 0 {
@@ -944,8 +938,11 @@ fn bareiss(
     let mut operations = 0usize;
     for pivot_index in 0..dimension - 1 {
         if matrix[pivot_index][pivot_index].is_empty() {
-            let Some(replacement) =
-                (pivot_index + 1..dimension).find(|row| !matrix[*row][pivot_index].is_empty())
+            let Some((replacement, _)) = matrix
+                .iter()
+                .enumerate()
+                .skip(pivot_index + 1)
+                .find(|(_, row)| !row[pivot_index].is_empty())
             else {
                 return Ok(YPolynomial::new());
             };
@@ -953,20 +950,26 @@ fn bareiss(
             sign = -sign;
         }
         let pivot = matrix[pivot_index][pivot_index].clone();
-        for row in pivot_index + 1..dimension {
-            for column in pivot_index + 1..dimension {
-                if operations % CANCEL_CHECK_BATCH == 0 {
+        let (pivot_row, lower_rows) = matrix[pivot_index..]
+            .split_first_mut()
+            .expect("non-empty Bareiss matrix");
+        for row in lower_rows {
+            let row_pivot = row[pivot_index].clone();
+            let (_, row_columns) = row.split_at_mut(pivot_index + 1);
+            let (_, pivot_columns) = pivot_row.split_at(pivot_index + 1);
+            for (entry, pivot_entry) in row_columns.iter_mut().zip(pivot_columns) {
+                if operations.is_multiple_of(CANCEL_CHECK_BATCH) {
                     control.check_cancelled()?;
                 }
                 operations += 1;
-                let product = y_mul(&matrix[row][column], &pivot);
-                let cross = y_mul(&matrix[row][pivot_index], &matrix[pivot_index][column]);
+                let product = y_mul(entry, &pivot);
+                let cross = y_mul(&row_pivot, pivot_entry);
                 let mut numerator = product;
                 for (degree, coefficient) in cross {
                     *numerator.entry(degree).or_default() -= coefficient;
                 }
                 numerator.retain(|_, coefficient| *coefficient != 0);
-                matrix[row][column] = if pivot_index == 0 {
+                *entry = if pivot_index == 0 {
                     numerator
                 } else {
                     y_div_exact(&numerator, &previous_pivot)
@@ -978,7 +981,7 @@ fn bareiss(
     let determinant = matrix[dimension - 1][dimension - 1].clone();
     Ok(determinant
         .into_iter()
-        .map(|(degree, coefficient)| (degree, Integer::from(coefficient * &sign)))
+        .map(|(degree, coefficient)| (degree, coefficient * &sign))
         .collect())
 }
 

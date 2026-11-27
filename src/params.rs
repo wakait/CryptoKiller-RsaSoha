@@ -1,5 +1,5 @@
 use base64::{engine::general_purpose, Engine};
-use rug::Integer;
+use rug::{Complete, Integer};
 
 use crate::DEFAULT_SEARCH_BUDGET;
 use std::{
@@ -574,10 +574,10 @@ impl Parameters {
     fn derive_known_values(&mut self) {
         if let (Some(p), Some(q)) = (&self.p, &self.q) {
             if self.n.is_none() {
-                self.n = Some((p * q).into());
+                self.n = Some((p * q).complete());
             }
             if self.phi.is_none() {
-                self.phi = Some(((p - Integer::from(1)) * (q - Integer::from(1))).into());
+                self.phi = Some((p - Integer::from(1)) * (q - Integer::from(1)));
             }
         }
     }

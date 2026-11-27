@@ -1,5 +1,5 @@
 use indicatif::ProgressBar;
-use rug::{ops::Pow, Integer, Rational};
+use rug::{ops::Pow, Complete, Integer, Rational};
 
 use crate::{
     attack::{AttackControl, Error, MAX_LLL_DIMENSION, MAX_POLYNOMIAL_DEGREE},
@@ -63,7 +63,7 @@ impl Attack for CoppersmithMessageAttack {
             return Err(Error::Unsupported);
         }
 
-        let base = Integer::from(known * &bound);
+        let base = (known * &bound).complete();
         if bound
             .to_u32()
             .is_some_and(|value| value <= MAX_DIRECT_SMALL_ROOT_BOUND)
@@ -71,7 +71,7 @@ impl Attack for CoppersmithMessageAttack {
             let limit = bound.to_u32().ok_or(Error::Unsupported)?;
             for root in 0..limit {
                 control.check_cancelled()?;
-                let candidate = Integer::from(&base + root);
+                let candidate = (&base + root).complete();
                 if candidate
                     .clone()
                     .pow_mod(&params.e, n)
@@ -93,7 +93,7 @@ impl Attack for CoppersmithMessageAttack {
             if root < 0 || root >= bound {
                 continue;
             }
-            let candidate = Integer::from(&base + root);
+            let candidate = &base + root;
             if candidate
                 .clone()
                 .pow_mod(&params.e, n)
@@ -117,7 +117,7 @@ mod tests {
     fn coppersmith_message_recovers_fixed_vector() {
         let p = Integer::from(1000003);
         let q = Integer::from(1000033);
-        let n = Integer::from(&p * &q);
+        let n = (&p * &q).complete();
         let m = Integer::from(123456);
         let c = m.clone().pow_mod(&5.into(), &n).unwrap();
         let params = Parameters {
@@ -137,7 +137,7 @@ mod tests {
     #[test]
     fn coppersmith_message_rejects_wrong_ciphertext() {
         let params = Parameters {
-            n: Some((Integer::from(1000003) * Integer::from(1000033)).into()),
+            n: Some(Integer::from(1000003) * Integer::from(1000033)),
             e: 5.into(),
             c: Some(0.into()),
             m_known: Some(964.into()),
@@ -153,7 +153,7 @@ mod tests {
     #[test]
     fn coppersmith_message_small_bound_wrong_ciphertext_finishes_without_lll() {
         let params = Parameters {
-            n: Some((Integer::from(1000003) * Integer::from(1000033)).into()),
+            n: Some(Integer::from(1000003) * Integer::from(1000033)),
             e: 5.into(),
             c: Some(0.into()),
             m_known: Some(964.into()),
